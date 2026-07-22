@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Luca Nexus agent tools",
+  "description": "Tool contracts for Luca build streaming. UI events: phase → file/command (in_progress|done) → summary → status. Never stream raw model reasoning.",
+  "tools": [
+    {
+      "name": "phase",
+      "description": "Emit a short narrative sentence describing the next batch of work. Call IMMEDIATELY before write_file / edit_file / install_package / delete_file for that batch. One sentence, no hype.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "e.g. \"Setting up the cart state and product data\""
+          }
+        },
+        "required": ["text"]
+      },
+      "emits": [{ "type": "phase", "fields": ["id", "text"] }]
+    },
+    {
+      "name": "think",
+      "description": "Internal planning only. Client sees a collapsed \"Thought for Xs\" line with NO reasoning text.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string" }
+        },
+        "required": ["text"]
+      },
+      "emits": [
+        { "type": "thinking", "fields": ["durationSec"], "note": "text always empty on the wire" }
+      ]
+    },
+    {
+      "name": "set_project",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" }
+        },
+        "required": ["id"]
+      },
+      "emits": [{ "type": "project", "fields": ["id"] }]
+    },
+    {
+      "name": "write_file",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "code": { "type": "string" },
+          "language": { "type": "string" },
+          "phase_id": {
+            "type": "string",
+            "description": "Optional; server attaches current phase if omitted"
+          }
+        },
+        "required": ["path", "code"]
+      },
+      "emits": [
+        {
+          "type": "file",
+          "fields": ["path", "action", "status", "phaseId", "language", "code", "linesDelta"]
+        }
+      ]
+    },
+    {
+      "name": "edit_file",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "old_string": { "type": "string" },
+          "new_string": { "type": "string" },
+          "replace_all": { "type": "boolean" },
+          "phase_id": { "type": "string" }
+        },
+        "required": ["path", "old_string", "new_string"]
+      },
+      "emits": [
+        {
+          "type": "file",
+          "fields": ["path", "action", "status", "phaseId", "language", "code", "linesDelta"]
+        }
+      ]
+    },
+    {
+      "name": "delete_file",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "phase_id": { "type": "string" }
+        },
+        "required": ["path"]
+      },
+      "emits": [
+        {
+          "type": "file",
+          "fields": ["path", "action", "status", "phaseId"]
+        }
+      ]
+    },
+    {
+      "name": "install_package",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "version": { "type": "string" },
+          "phase_id": { "type": "string" }
+        },
+        "required": ["name"]
+      },
+      "emits": [
+        { "type": "command", "fields": ["name", "status", "phaseId", "detail"] },
+        { "type": "package", "fields": ["name", "version"] }
+      ]
+    },
+    {
+      "name": "write_image",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "query": { "type": "string" },
+          "aspect": { "type": "string" }
+        },
+        "required": ["path", "query"]
+      },
+      "emits": [{ "type": "image", "fields": ["path", "query", "aspect", "url"] }]
+    },
+    {
+      "name": "message_user",
+      "description": "Q&A / short chat only. For builds use phase + finish.summary instead.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string" }
+        },
+        "required": ["text"]
+      },
+      "emits": [{ "type": "text", "fields": ["text"] }]
+    },
+    {
+      "name": "suggest_actions",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "description": { "type": "string" }
+              },
+              "required": ["name"]
+            }
+          }
+        },
+        "required": ["actions"]
+      },
+      "emits": [{ "type": "actions", "fields": ["actions"] }]
+    },
+    {
+      "name": "finish",
+      "description": "End the turn. summary = plain one-line-per-feature-area bullets, no marketing adjectives.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string",
+            "description": "Plain lines of what got built (one feature area per line)"
+          }
+        }
+      },
+      "emits": [
+        { "type": "summary", "fields": ["lines"] },
+        { "type": "status", "fields": ["action", "filesChanged", "linesDelta"] }
+      ]
+    }
+  ],
+  "clientEvents": [
+    "phase",
+    "file",
+    "command",
+    "thinking",
+    "thinking_done",
+    "summary",
+    "status",
+    "preview",
+    "error",
+    "text",
+    "text_delta",
+    "actions",
+    "project",
+    "package",
+    "image",
+    "done",
+    "ping"
+  ]
+}

@@ -17,6 +17,10 @@
 /.next/
 /out/
 
+# local Next.js preview workspaces (per-chat next dev)
+/.preview-runtime/
+/.preview-workspaces/
+
 # production
 /build
 
@@ -32,6 +36,11 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+
+# Gemini API key pool (never commit)
+gemini-keys.txt
+*.keys.txt
+.gemini-key-state.json
 
 # vercel
 .vercel

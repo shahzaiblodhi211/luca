@@ -1,36 +1,33 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Luca AI
 
-## Getting Started
+**Luca AI** is a generative UI builder by **Luca Technology**. Describe a site or app, attach a screenshot or URL, and Luca AI ships a live Next.js preview with Awwwards-caliber craft.
 
-First, run the development server:
+## Getting started
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Configure Gemini keys in `.env.local` (`GEMINI_API_KEY_1` … `GEMINI_API_KEY_500`, and/or `GEMINI_API_KEYS`, and/or `GEMINI_API_KEYS_FILE` for one key per line). Luca rotates across the pool on 429/quota.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Switch providers in `.env.local` with `AI_PROVIDER` (restart dev after change):
 
-## Learn More
+| Value | Behavior |
+|-------|----------|
+| `gemini` | Google AI Studio keys only |
+| `puter` | Puter only (`PUTER_AUTH_TOKEN` from [dashboard](https://puter.com/dashboard)) |
+| `auto` | Gemini first → Puter if Gemini fails |
+| `puter-first` | Puter first → Gemini if Puter fails |
 
-To learn more about Next.js, take a look at the following resources:
+## Stack
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- Next.js App Router + Tailwind CSS v4
+- Tool-calling agent (`Prompt.md`) → live preview workspaces
+- Built by [Luca Technology](.)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## License
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Private — Luca Technology.
