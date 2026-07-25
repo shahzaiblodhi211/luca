@@ -223,24 +223,30 @@ async function startProcess(
   const bin = nextBinPath();
   const previewBasePath = previewBasePathForPort(port);
 
-  const child = spawn(
-    process.execPath,
-    [bin, "dev", "--port", String(port), "--hostname", "127.0.0.1"],
-    {
-      cwd,
-      env: {
-        ...process.env,
-        NODE_ENV: "development",
-        BROWSER: "none",
-        NEXT_TELEMETRY_DISABLED: "1",
-        ...(previewBasePath
-          ? { LUCA_PREVIEW_BASE_PATH: previewBasePath }
-          : {}),
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
+  const devArgs = [
+    bin,
+    "dev",
+    "--webpack",
+    "--port",
+    String(port),
+    "--hostname",
+    "127.0.0.1",
+  ];
+
+  const child = spawn(process.execPath, devArgs, {
+    cwd,
+    env: {
+      ...process.env,
+      NODE_ENV: "development",
+      BROWSER: "none",
+      NEXT_TELEMETRY_DISABLED: "1",
+      ...(previewBasePath
+        ? { LUCA_PREVIEW_BASE_PATH: previewBasePath }
+        : {}),
     },
-  );
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
 
   const managed: Managed = {
     child,

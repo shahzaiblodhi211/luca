@@ -11,7 +11,8 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import net from "node:net";
+import https from "node:https";
+import httpProxy from "http-proxy";
 import {
   runPreviewDelete,
   runPreviewGet,
@@ -23,6 +24,21 @@ import { previewBasePathForPort } from "@/lib/preview/public-url";
 
 const PORT = Number(process.env.PREVIEW_WORKER_PORT ?? 3001);
 const HOST = process.env.PREVIEW_WORKER_HOST ?? "127.0.0.1";
+
+const wsProxy = httpProxy.createProxyServer({ ws: true, xfwd: true });
+
+wsProxy.on("error", (err, _req, socket) => {
+  console.error("[preview-worker] ws proxy", err.message);
+  if (socket && "destroy" in socket) socket.destroy();
+});
+
+function lucaAppOrigin(): string {
+  return (
+    process.env.LUCA_APP_ORIGIN?.trim() ||
+    process.env.NEXT_PUBLIC_APP_URL?.trim() ||
+    ""
+  ).replace(/\/+$/, "");
+}
 
 function corsOrigin(req: IncomingMessage): string | null {
   const raw = process.env.PREVIEW_CORS_ORIGINS?.trim();
@@ -115,33 +131,41 @@ function proxyToPreviewPort(
   req.pipe(upstream);
 }
 
-function proxyWebSocket(
+function proxyToLucaApp(
   req: IncomingMessage,
-  socket: import("node:stream").Duplex,
-  head: Buffer,
-  port: number,
+  res: ServerResponse,
   pathWithSearch: string,
 ) {
-  socket.on("error", () => {});
-  const upstream = net.connect({ port, host: "127.0.0.1" }, () => {
-    const headers = { ...req.headers, host: `127.0.0.1:${port}` };
-    const headerLines = Object.entries(headers)
-      .flatMap(([k, v]) =>
-        v == null
-          ? []
-          : Array.isArray(v)
-            ? v.map((one) => `${k}: ${one}`)
-            : [`${k}: ${v}`],
-      )
-      .join("\r\n");
-    upstream.write(
-      `${req.method} ${pathWithSearch} HTTP/${req.httpVersion}\r\n${headerLines}\r\n\r\n`,
-    );
-    if (head.length) upstream.write(head);
-    upstream.pipe(socket);
-    socket.pipe(upstream);
+  const origin = lucaAppOrigin();
+  if (!origin) {
+    json(res, 502, { error: "LUCA_APP_ORIGIN not configured" });
+    return;
+  }
+  const target = new URL(pathWithSearch, `${origin}/`);
+  const headers = { ...req.headers, host: target.host };
+  const requestFn =
+    target.protocol === "https:"
+      ? https.request.bind(https)
+      : httpRequest;
+  const upstream = requestFn(
+    {
+      hostname: target.hostname,
+      port: target.port || (target.protocol === "https:" ? 443 : 80),
+      path: `${target.pathname}${target.search}`,
+      method: req.method,
+      headers,
+    },
+    (pres) => {
+      res.writeHead(pres.statusCode ?? 502, pres.headers);
+      pres.pipe(res);
+    },
+  );
+  upstream.on("error", (err) => {
+    json(res, 502, {
+      error: err instanceof Error ? err.message : "Luca app proxy failed",
+    });
   });
-  upstream.on("error", () => socket.destroy());
+  req.pipe(upstream);
 }
 
 const server = createServer(async (req, res) => {
@@ -151,6 +175,11 @@ const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "local"}`);
     const pathname = url.pathname;
 
+    if (pathname.startsWith("/api/images/")) {
+      proxyToLucaApp(req, res, `${pathname}${url.search}`);
+      return;
+    }
+
     const previewProxy = pathname.match(/^\/_preview\/(\d+)(\/.*)?$/);
     if (previewProxy) {
       const port = Number.parseInt(previewProxy[1]!, 10);
@@ -158,7 +187,6 @@ const server = createServer(async (req, res) => {
         json(res, 400, { error: "Invalid preview port" });
         return;
       }
-      // Forward full path (includes /_preview/:port) — Next dev uses matching basePath
       proxyToPreviewPort(req, res, port, pathname, url.search);
       return;
     }
@@ -204,28 +232,27 @@ const server = createServer(async (req, res) => {
 });
 
 server.on("upgrade", (req, socket, head) => {
-  try {
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "local"}`);
-    const previewProxy = url.pathname.match(/^\/_preview\/(\d+)(\/.*)?$/);
-    if (!previewProxy) {
-      socket.destroy();
-      return;
-    }
-    const port = Number.parseInt(previewProxy[1]!, 10);
-    if (port < 4100 || port > 4199) {
-      socket.destroy();
-      return;
-    }
-    proxyWebSocket(
-      req,
-      socket,
-      head,
-      port,
-      `${url.pathname}${url.search}`,
-    );
-  } catch {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "local"}`);
+  const previewProxy = url.pathname.match(/^\/_preview\/(\d+)(\/.*)?$/);
+  if (!previewProxy) {
     socket.destroy();
+    return;
   }
+  const port = Number.parseInt(previewProxy[1]!, 10);
+  if (port < 4100 || port > 4199) {
+    socket.destroy();
+    return;
+  }
+  wsProxy.ws(
+    req,
+    socket,
+    head,
+    { target: `http://127.0.0.1:${port}`, changeOrigin: true },
+    (err) => {
+      console.error("[preview-worker] upgrade", err?.message);
+      socket.destroy();
+    },
+  );
 });
 
 server.listen(PORT, HOST, () => {

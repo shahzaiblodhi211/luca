@@ -19,6 +19,21 @@ import {
   workspaceDirFor,
 } from "./paths";
 import { ensureInspectorInLayout } from "./luca-inspector-layout";
+
+function lucaAppOrigin(): string {
+  return (
+    process.env.LUCA_APP_ORIGIN?.trim() ||
+    process.env.NEXT_PUBLIC_APP_URL?.trim() ||
+    ""
+  ).replace(/\/+$/, "");
+}
+
+/** Preview iframe is on another host — /api/images lives on main Luca (Vercel). */
+function rewriteLucaImageApiUrls(code: string): string {
+  const origin = lucaAppOrigin();
+  if (!origin) return code;
+  return code.replace(/(["'`])\/api\/images\//g, `$1${origin}/api/images/`);
+}
 import {
   resolveNextUiStubFiles,
   SCAFFOLD_GITIGNORE,
@@ -244,6 +259,7 @@ export async function syncPreviewWorkspace(
       if (!isRootLayout) {
         code = ensureUseClientDirective(code);
       }
+      code = rewriteLucaImageApiUrls(code);
     } else if (/\.css$/i.test(p)) {
       code = normalizePreviewCss(sanitizeGeneratedCode(file.code));
     } else if (/\.(mjs|cjs)$/i.test(p)) {
@@ -276,7 +292,7 @@ export async function syncPreviewWorkspace(
     if (!layout.includes("suppressHydrationWarning")) {
       layout = layout.replace(/<html\b/, "<html suppressHydrationWarning");
     }
-    layout = ensureInspectorInLayout(layout);
+    layout = ensureInspectorInLayout(layout, loadLucaInspectorScript());
     byPath.set("app/layout.tsx", layout);
   }
 
