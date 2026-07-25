@@ -269,8 +269,9 @@ export function ProjectCodeEditor({
           ))}
         </aside>
 
-        <div className="min-w-0 flex-1">
+        <div className="relative min-h-[320px] min-w-0 flex-1">
           {activeFile ? (
+            <div className="absolute inset-0">
             <Editor
               height="100%"
               theme="vs-dark"
@@ -309,6 +310,7 @@ export function ProjectCodeEditor({
                 </div>
               }
             />
+            </div>
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-zinc-500">
               Select a file

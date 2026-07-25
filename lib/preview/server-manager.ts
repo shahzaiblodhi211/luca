@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   unlinkSync,
   writeFileSync,
@@ -350,25 +351,35 @@ export async function ensurePreviewServer(
     servers.delete(id);
   }
 
-  // After parent HMR, Map is empty but orphan next-dev may still be alive
+  // After parent HMR, Map is empty but orphan next-dev may still be alive.
+  // With public preview URL, never reattach — old dev may lack basePath / env.
+  const usePublicPreview = Boolean(process.env.PREVIEW_PUBLIC_ORIGIN?.trim());
   if (!opts?.restart) {
     const persisted = readPersisted(id);
     if (persisted) {
       const url = previewLoopbackUrl(persisted.port);
       if (await httpAlive(url)) {
-        const info: PreviewServerInfo = {
-          chatId: id,
-          port: persisted.port,
-          url,
-          pid: persisted.pid,
-          status: "ready",
-          startedAt: persisted.startedAt,
-        };
-        servers.set(id, { info, child: null, logs: [] });
+        if (!usePublicPreview) {
+          const info: PreviewServerInfo = {
+            chatId: id,
+            port: persisted.port,
+            url,
+            pid: persisted.pid,
+            status: "ready",
+            startedAt: persisted.startedAt,
+          };
+          servers.set(id, { info, child: null, logs: [] });
+          console.info(
+            `[preview] reattached orphan :${persisted.port} pid=${persisted.pid}`,
+          );
+          return info;
+        }
         console.info(
-          `[preview] reattached orphan :${persisted.port} pid=${persisted.pid}`,
+          `[preview] killing stale public-preview dev :${persisted.port} pid=${persisted.pid}`,
         );
-        return info;
+        await killPid(persisted.pid);
+        clearPersisted(id);
+        await new Promise((r) => setTimeout(r, 400));
       }
     }
   }
@@ -377,4 +388,24 @@ export async function ensurePreviewServer(
   const port = await findFreePort();
   const managed = await startProcess(id, port);
   return managed.info;
+}
+
+/** Kill persisted preview dev PIDs (e.g. after worker redeploy). */
+export async function killAllStalePreviewDevServers(): Promise<void> {
+  const dir = path.join(PREVIEW_RUNTIME_DIR, "servers");
+  try {
+    for (const file of readdirSync(dir)) {
+      if (!file.endsWith(".json")) continue;
+      try {
+        const data = JSON.parse(
+          readFileSync(path.join(dir, file), "utf8"),
+        ) as PersistedServer;
+        if (data?.pid) await killPid(data.pid);
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch {
+    /* no servers dir */
+  }
 }

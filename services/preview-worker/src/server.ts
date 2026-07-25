@@ -17,6 +17,8 @@ import {
   runPreviewPost,
   type PreviewPostBody,
 } from "@/lib/preview/run-preview-request";
+import { killAllStalePreviewDevServers } from "@/lib/preview/server-manager";
+import { previewBasePathForPort } from "@/lib/preview/public-url";
 
 const PORT = Number(process.env.PREVIEW_WORKER_PORT ?? 3001);
 const HOST = process.env.PREVIEW_WORKER_HOST ?? "127.0.0.1";
@@ -67,6 +69,21 @@ function json(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
+function rewritePreviewHeaders(
+  port: number,
+  headers: IncomingMessage["headers"],
+): IncomingMessage["headers"] {
+  const base = previewBasePathForPort(port);
+  if (!base) return headers;
+  const out = { ...headers };
+  const loc = out.location;
+  const raw = Array.isArray(loc) ? loc[0] : loc;
+  if (typeof raw === "string" && raw.startsWith("/") && !raw.startsWith(base)) {
+    out.location = `${base}${raw === "/" ? "" : raw}`;
+  }
+  return out;
+}
+
 function proxyToPreviewPort(
   req: IncomingMessage,
   res: ServerResponse,
@@ -84,7 +101,8 @@ function proxyToPreviewPort(
       headers,
     },
     (pres) => {
-      res.writeHead(pres.statusCode ?? 502, pres.headers);
+      const outHeaders = rewritePreviewHeaders(port, pres.headers);
+      res.writeHead(pres.statusCode ?? 502, outHeaders);
       pres.pipe(res);
     },
   );
@@ -157,4 +175,7 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.info(`[preview-worker] http://${HOST}:${PORT}`);
+  void killAllStalePreviewDevServers().then(() => {
+    console.info("[preview-worker] cleared stale preview dev processes");
+  });
 });

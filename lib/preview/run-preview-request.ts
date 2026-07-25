@@ -38,7 +38,10 @@ export async function runPreviewPost(body: PreviewPostBody) {
       body.packages ?? {},
     );
     const server = await ensurePreviewServer(chatId, {
-      restart: Boolean(body.restart) || sync.depsChanged,
+      restart:
+        Boolean(body.restart) ||
+        sync.depsChanged ||
+        Boolean(process.env.PREVIEW_PUBLIC_ORIGIN?.trim()),
     });
     const routes = listPreviewRoutes(files);
     return {
