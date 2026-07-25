@@ -111,7 +111,7 @@ export function CodePreview({
   );
 
   const previewSrc = baseUrl
-    ? `${baseUrl}${activePath === "/" ? "" : activePath}`
+    ? `${baseUrl.replace(/\/+$/, "")}${activePath === "/" ? "/" : activePath}`
     : null;
 
   const softReloadIframe = useCallback(() => {

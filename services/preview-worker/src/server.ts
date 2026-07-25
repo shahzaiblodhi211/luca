@@ -11,6 +11,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import net from "node:net";
 import {
   runPreviewDelete,
   runPreviewGet,
@@ -114,6 +115,35 @@ function proxyToPreviewPort(
   req.pipe(upstream);
 }
 
+function proxyWebSocket(
+  req: IncomingMessage,
+  socket: import("node:stream").Duplex,
+  head: Buffer,
+  port: number,
+  pathWithSearch: string,
+) {
+  socket.on("error", () => {});
+  const upstream = net.connect({ port, host: "127.0.0.1" }, () => {
+    const headers = { ...req.headers, host: `127.0.0.1:${port}` };
+    const headerLines = Object.entries(headers)
+      .flatMap(([k, v]) =>
+        v == null
+          ? []
+          : Array.isArray(v)
+            ? v.map((one) => `${k}: ${one}`)
+            : [`${k}: ${v}`],
+      )
+      .join("\r\n");
+    upstream.write(
+      `${req.method} ${pathWithSearch} HTTP/${req.httpVersion}\r\n${headerLines}\r\n\r\n`,
+    );
+    if (head.length) upstream.write(head);
+    upstream.pipe(socket);
+    socket.pipe(upstream);
+  });
+  upstream.on("error", () => socket.destroy());
+}
+
 const server = createServer(async (req, res) => {
   try {
     if (applyCors(req, res)) return;
@@ -170,6 +200,31 @@ const server = createServer(async (req, res) => {
     json(res, 500, {
       error: err instanceof Error ? err.message : "Internal error",
     });
+  }
+});
+
+server.on("upgrade", (req, socket, head) => {
+  try {
+    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "local"}`);
+    const previewProxy = url.pathname.match(/^\/_preview\/(\d+)(\/.*)?$/);
+    if (!previewProxy) {
+      socket.destroy();
+      return;
+    }
+    const port = Number.parseInt(previewProxy[1]!, 10);
+    if (port < 4100 || port > 4199) {
+      socket.destroy();
+      return;
+    }
+    proxyWebSocket(
+      req,
+      socket,
+      head,
+      port,
+      `${url.pathname}${url.search}`,
+    );
+  } catch {
+    socket.destroy();
   }
 });
 

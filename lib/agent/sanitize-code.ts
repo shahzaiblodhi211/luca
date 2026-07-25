@@ -116,7 +116,7 @@ export function needsUseClientDirective(code: string): boolean {
     /from\s+["']motion["']/.test(code) ||
     /\bAnimatePresence\b/.test(code) ||
     /\bReact\.use\b/.test(code) ||
-    /\b(useState|useEffect|useRef|useContext|useReducer|useLayoutEffect|useSyncExternalStore|useTransition|useOptimistic|use)\s*\(/.test(
+    /\b(useState|useEffect|useRef|useContext|useReducer|useLayoutEffect|useSyncExternalStore|useTransition|useOptimistic|useMemo|useCallback|use)\s*\(/.test(
       code,
     ) ||
     /\bon[A-Z][a-zA-Z]*\s*=\s*\{/.test(code)

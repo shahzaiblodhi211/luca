@@ -12,7 +12,7 @@ export function previewPublicOrigin(port: number): string {
   if (!base) return previewInternalOrigin(port);
   const raw = process.env.PREVIEW_PUBLIC_ORIGIN!.trim();
   const origin = raw.replace(/\/+$/, "");
-  return `${origin}${base}`;
+  return `${origin}${base}/`;
 }
 
 /** Path prefix for Next `basePath` when iframe uses public preview URL (e.g. /_preview/4103). */

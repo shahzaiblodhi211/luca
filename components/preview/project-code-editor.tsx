@@ -1,6 +1,6 @@
 "use client";
 
-import Editor from "@monaco-editor/react";
+import dynamic from "next/dynamic";
 import {
   ChevronDown,
   ChevronRight,
@@ -9,9 +9,19 @@ import {
   FolderOpen,
   Loader2,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectFile } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full min-h-[200px] items-center justify-center gap-2 text-sm text-zinc-500">
+      <Loader2 className="h-4 w-4 animate-spin" />
+      Loading editor…
+    </div>
+  ),
+});
 
 type TreeNode = {
   name: string;
@@ -183,6 +193,21 @@ export function ProjectCodeEditor({
   packages?: Record<string, string>;
   onFilesChange?: (files: ProjectFile[]) => void;
 }) {
+  const editorWrapRef = useRef<HTMLDivElement>(null);
+  const [editorHeight, setEditorHeight] = useState(480);
+
+  useEffect(() => {
+    const el = editorWrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const h = el.clientHeight;
+      if (h > 120) setEditorHeight(h);
+    });
+    ro.observe(el);
+    setEditorHeight(Math.max(el.clientHeight, 320));
+    return () => ro.disconnect();
+  }, []);
+
   const sorted = useMemo(
     () =>
       [...files].sort((a, b) =>
@@ -269,11 +294,13 @@ export function ProjectCodeEditor({
           ))}
         </aside>
 
-        <div className="relative min-h-[320px] min-w-0 flex-1">
+        <div
+          ref={editorWrapRef}
+          className="relative min-h-[320px] min-w-0 flex-1"
+        >
           {activeFile ? (
-            <div className="absolute inset-0">
-            <Editor
-              height="100%"
+            <MonacoEditor
+              height={editorHeight}
               theme="vs-dark"
               path={activeFile.path}
               language={languageFromPath(activeFile.path)}
@@ -303,14 +330,7 @@ export function ProjectCodeEditor({
                 smoothScrolling: true,
                 readOnly: !onFilesChange,
               }}
-              loading={
-                <div className="flex h-full items-center justify-center gap-2 text-sm text-zinc-500">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Loading editor…
-                </div>
-              }
             />
-            </div>
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-zinc-500">
               Select a file
