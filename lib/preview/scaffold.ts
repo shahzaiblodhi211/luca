@@ -276,7 +276,10 @@ export default config;
 
 export const SCAFFOLD_NEXT_CONFIG = `import type { NextConfig } from "next";
 
+const basePath = process.env.LUCA_PREVIEW_BASE_PATH?.trim() || undefined;
+
 const nextConfig: NextConfig = {
+  ...(basePath ? { basePath } : {}),
   images: {
     unoptimized: true,
   },

@@ -8,13 +8,21 @@ export function previewInternalOrigin(port: number): string {
  * and run the preview worker proxy at /_preview/:port (see services/preview-worker).
  */
 export function previewPublicOrigin(port: number): string {
-  const raw = process.env.PREVIEW_PUBLIC_ORIGIN?.trim();
-  if (!raw) return previewInternalOrigin(port);
+  const base = previewBasePathForPort(port);
+  if (!base) return previewInternalOrigin(port);
+  const raw = process.env.PREVIEW_PUBLIC_ORIGIN!.trim();
   const origin = raw.replace(/\/+$/, "");
+  return `${origin}${base}`;
+}
+
+/** Path prefix for Next `basePath` when iframe uses public preview URL (e.g. /_preview/4103). */
+export function previewBasePathForPort(port: number): string | null {
+  const raw = process.env.PREVIEW_PUBLIC_ORIGIN?.trim();
+  if (!raw) return null;
   const prefix = (
     process.env.PREVIEW_PUBLIC_PATH_PREFIX ?? "/_preview"
   ).replace(/\/+$/, "");
-  return `${origin}${prefix}/${port}`;
+  return `${prefix}/${port}`;
 }
 
 export function withPublicPreviewUrl<T extends { port: number; url: string }>(

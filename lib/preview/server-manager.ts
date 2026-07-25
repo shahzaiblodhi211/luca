@@ -13,7 +13,10 @@ import {
   sanitizeChatId,
   workspaceDirFor,
 } from "./paths";
-import { previewInternalOrigin } from "./public-url";
+import {
+  previewBasePathForPort,
+  previewInternalOrigin,
+} from "./public-url";
 
 export type PreviewServerInfo = {
   chatId: string;
@@ -217,6 +220,7 @@ async function startProcess(
 ): Promise<Managed> {
   const cwd = workspaceDirFor(chatId);
   const bin = nextBinPath();
+  const previewBasePath = previewBasePathForPort(port);
 
   const child = spawn(
     process.execPath,
@@ -228,6 +232,9 @@ async function startProcess(
         NODE_ENV: "development",
         BROWSER: "none",
         NEXT_TELEMETRY_DISABLED: "1",
+        ...(previewBasePath
+          ? { LUCA_PREVIEW_BASE_PATH: previewBasePath }
+          : {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,

@@ -106,12 +106,12 @@ const server = createServer(async (req, res) => {
     const previewProxy = pathname.match(/^\/_preview\/(\d+)(\/.*)?$/);
     if (previewProxy) {
       const port = Number.parseInt(previewProxy[1]!, 10);
-      const rest = previewProxy[2] ?? "/";
       if (port < 4100 || port > 4199) {
         json(res, 400, { error: "Invalid preview port" });
         return;
       }
-      proxyToPreviewPort(req, res, port, rest, url.search);
+      // Forward full path (includes /_preview/:port) — Next dev uses matching basePath
+      proxyToPreviewPort(req, res, port, pathname, url.search);
       return;
     }
 
