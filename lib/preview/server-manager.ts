@@ -13,6 +13,7 @@ import {
   sanitizeChatId,
   workspaceDirFor,
 } from "./paths";
+import { previewInternalOrigin } from "./public-url";
 
 export type PreviewServerInfo = {
   chatId: string;
@@ -41,8 +42,8 @@ const servers = new Map<string, Managed>();
 const PORT_START = 4100;
 const PORT_END = 4199;
 
-function previewUrl(port: number): string {
-  return `http://127.0.0.1:${port}`;
+function previewLoopbackUrl(port: number): string {
+  return previewInternalOrigin(port);
 }
 
 function persistPath(chatId: string): string {
@@ -118,7 +119,7 @@ async function httpAlive(url: string, timeoutMs = 1500): Promise<boolean> {
 
 async function waitForReady(port: number, timeoutMs = 90_000): Promise<void> {
   const start = Date.now();
-  const url = previewUrl(port);
+  const url = previewLoopbackUrl(port);
   while (Date.now() - start < timeoutMs) {
     if (await httpAlive(url, 2000)) return;
     await new Promise((r) => setTimeout(r, 400));
@@ -239,7 +240,7 @@ async function startProcess(
     info: {
       chatId,
       port,
-      url: previewUrl(port),
+      url: previewLoopbackUrl(port),
       pid: child.pid ?? null,
       status: "starting",
       startedAt: Date.now(),
@@ -346,7 +347,7 @@ export async function ensurePreviewServer(
   if (!opts?.restart) {
     const persisted = readPersisted(id);
     if (persisted) {
-      const url = previewUrl(persisted.port);
+      const url = previewLoopbackUrl(persisted.port);
       if (await httpAlive(url)) {
         const info: PreviewServerInfo = {
           chatId: id,

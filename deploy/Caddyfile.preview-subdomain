@@ -1,0 +1,7 @@
+# Preview worker only — DigitalOcean droplet
+
+# DNS: preview.lucaai.app → this droplet
+
+preview.lucaai.app {
+	reverse_proxy 127.0.0.1:3001
+}

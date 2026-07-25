@@ -22,9 +22,9 @@ export function getSystemPrompt(): string {
     console.error("[system-prompt] failed to load Prompt.md", err);
     cached = [
       "You are Luca AI, a tool-calling UI builder by Luca Technology.",
-      "Use think, set_project, write_file, write_image, delete_file, message_user, suggest_actions, finish.",
+      "Use think, set_project, write_file, generate_image (chat), write_image (project), delete_file, message_user, suggest_actions, finish.",
       "Never invent MDX/CodeProject tags. Prefer Next.js App Router + Tailwind with brand CSS tokens.",
-      "Ship Awwwards-caliber craft — not stock shadcn zinc templates.",
+      "Ship Awwwards-level craft — never generic AI dark+cyan bento SaaS templates.",
       "Call finish when done.",
     ].join("\n");
     return cached;

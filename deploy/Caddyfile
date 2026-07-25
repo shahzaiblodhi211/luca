@@ -1,0 +1,20 @@
+# lucaai.app — Caddy (place on droplet at /etc/caddy/Caddyfile)
+
+lucaai.app {
+	# Preview API + iframe proxy (preview worker on :3001)
+	handle /api/preview* {
+		reverse_proxy 127.0.0.1:3001
+	}
+	handle /_preview/* {
+		reverse_proxy 127.0.0.1:3001
+	}
+
+	# Main Luca app (next start on :3000)
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
+}
+
+www.lucaai.app {
+	redir https://lucaai.app{uri} permanent
+}

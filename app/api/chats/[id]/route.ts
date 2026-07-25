@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
-import { deleteChat, getChat, getChatImageDataUrls, serializeChat } from "@/lib/chats";
+import { getSessionUser } from "@/lib/auth";
+import {
+  deleteChat,
+  getChat,
+  getChatImageDataUrls,
+  serializeChat,
+} from "@/lib/chats";
 
 export const runtime = "nodejs";
 
@@ -7,8 +13,12 @@ type Params = { params: Promise<{ id: string }> };
 
 export async function GET(_req: Request, { params }: Params) {
   try {
+    const user = await getSessionUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const { id } = await params;
-    const chat = await getChat(id);
+    const chat = await getChat(id, user.id);
     if (!chat) {
       return NextResponse.json({ error: "Chat not found" }, { status: 404 });
     }
@@ -27,8 +37,12 @@ export async function GET(_req: Request, { params }: Params) {
 
 export async function DELETE(_req: Request, { params }: Params) {
   try {
+    const user = await getSessionUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     const { id } = await params;
-    const ok = await deleteChat(id);
+    const ok = await deleteChat(id, user.id);
     if (!ok) {
       return NextResponse.json({ error: "Chat not found" }, { status: 404 });
     }

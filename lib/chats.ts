@@ -18,10 +18,17 @@ import {
 } from "./resolve-images";
 import { getImageById, toDataUrl } from "./image-store";
 
-export async function listChats(limit = 40): Promise<ChatSummary[]> {
+export async function listChats(
+  userId: string,
+  limit = 40,
+): Promise<ChatSummary[]> {
+  if (!userId) return [];
   const col = await getChatsCollection();
   const docs = await col
-    .find({}, { projection: { title: 1, createdAt: 1, updatedAt: 1 } })
+    .find(
+      { userId },
+      { projection: { title: 1, createdAt: 1, updatedAt: 1 } },
+    )
     .sort({ updatedAt: -1 })
     .limit(limit)
     .toArray();
@@ -34,16 +41,26 @@ export async function listChats(limit = 40): Promise<ChatSummary[]> {
   }));
 }
 
-export async function getChat(id: string): Promise<ChatDoc | null> {
+/** Load a chat by id. Pass userId to enforce ownership. */
+export async function getChat(
+  id: string,
+  userId?: string,
+): Promise<ChatDoc | null> {
   const col = await getChatsCollection();
+  if (userId) {
+    return col.findOne({ _id: id, userId });
+  }
   return col.findOne({ _id: id });
 }
 
 export async function createChat(
+  userId: string,
   prompt: string,
   attachments: ChatAttachment[] = [],
   thinkingLevel?: string,
+  lucaModelTier?: string,
 ): Promise<ChatDoc> {
+  if (!userId) throw new Error("userId required");
   const col = await getChatsCollection();
   const now = new Date();
   const content =
@@ -61,6 +78,7 @@ export async function createChat(
 
   const doc: ChatDoc = {
     _id: nanoid(),
+    userId,
     title: titleFromPrompt(content || attachments[0]?.name || "Untitled chat"),
     messages: [userMessage],
     projectId: null,
@@ -69,6 +87,7 @@ export async function createChat(
     images: [],
     attachments,
     thinkingLevel: thinkingLevel || undefined,
+    lucaModelTier: lucaModelTier || undefined,
     createdAt: now,
     updatedAt: now,
   };
@@ -85,6 +104,17 @@ export async function setChatThinkingLevel(
   await col.updateOne(
     { _id: chatId },
     { $set: { thinkingLevel, updatedAt: new Date() } },
+  );
+}
+
+export async function setChatLucaModelTier(
+  chatId: string,
+  lucaModelTier: string,
+): Promise<void> {
+  const col = await getChatsCollection();
+  await col.updateOne(
+    { _id: chatId },
+    { $set: { lucaModelTier, updatedAt: new Date() } },
   );
 }
 
@@ -204,11 +234,17 @@ function rewriteFilesWithImagePaths(
   images: ChatImageRef[],
   dataUrls: Record<string, string>,
 ): ProjectFile[] {
-  // Prefer live HTTPS URLs from Pexels (dataUrls / img.url)
-  const liveMap: Record<string, string> = { ...dataUrls };
+  // Prefer /api/images/{id} in source; preview uses dataUrls separately
+  const liveMap: Record<string, string> = {};
   for (const img of images) {
-    const live = img.url || dataUrls[img.path];
-    if (!live?.startsWith("http")) continue;
+    const live =
+      (img.url?.startsWith("/api/images/") || img.url?.startsWith("http")
+        ? img.url
+        : undefined) ||
+      (dataUrls[img.path]?.startsWith("/api/images/")
+        ? dataUrls[img.path]
+        : undefined) ||
+      img.path;
     liveMap[img.path] = live;
     liveMap[img.path.replace(/^\//, "")] = live;
     liveMap[`public${img.path.startsWith("/") ? img.path : `/${img.path}`}`] =
@@ -220,8 +256,7 @@ function rewriteFilesWithImagePaths(
   next = next.map((file) => {
     let code = file.code;
     for (const img of images) {
-      const live = img.url || liveMap[img.path];
-      if (!live?.startsWith("http")) continue;
+      const live = liveMap[img.path] || img.path;
       const q = encodeURIComponent(img.query);
       const replacements = [
         [`/placeholder.svg?height=800&width=1200&query=${img.query}`, live],
@@ -329,9 +364,13 @@ export async function appendAssistantMessage(
   return result ?? null;
 }
 
-export async function deleteChat(id: string): Promise<boolean> {
+export async function deleteChat(
+  id: string,
+  userId: string,
+): Promise<boolean> {
+  if (!userId) return false;
   const col = await getChatsCollection();
-  const result = await col.deleteOne({ _id: id });
+  const result = await col.deleteOne({ _id: id, userId });
   return result.deletedCount > 0;
 }
 
@@ -360,8 +399,8 @@ export async function getChatImageDataUrls(
   const images = chat.images ?? [];
   await Promise.all(
     images.map(async (img) => {
-      // Live Pexels (etc.) URLs — no Mongo blob storage
-      if (img.url?.startsWith("http")) {
+      // External https only — Imagen assets are Mongo-backed via img.id
+      if (img.url?.startsWith("http") && !img.url.includes("/api/images/")) {
         out[img.path] = img.url;
         out[img.path.replace(/^\//, "")] = img.url;
         if (img.path.startsWith("/images/")) {
@@ -414,6 +453,7 @@ export function serializeChat(
     images: chat.images ?? [],
     attachments: chat.attachments ?? [],
     thinkingLevel: chat.thinkingLevel ?? null,
+    lucaModelTier: chat.lucaModelTier ?? null,
     imageDataUrls: imageDataUrls ?? {},
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,

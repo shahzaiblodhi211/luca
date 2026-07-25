@@ -1,9 +1,23 @@
 import { NextResponse } from "next/server";
-import { generateGeminiImage } from "@/lib/gemini-image";
-import { getImageByHash, hashImageQuery, saveImage, toDataUrl } from "@/lib/image-store";
+import {
+  generateImagenImage,
+  type ImageKind,
+} from "@/lib/gemini-image";
+import {
+  getImageByHash,
+  hashImageQuery,
+  saveImage,
+  toDataUrl,
+} from "@/lib/image-store";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
+
+function parseKind(raw: string | null | undefined): ImageKind {
+  const v = (raw || "").toLowerCase();
+  if (v === "logo" || v === "illustration") return v;
+  return "photo";
+}
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -12,18 +26,23 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "query is required" }, { status: 400 });
   }
 
+  const kind = parseKind(searchParams.get("kind"));
+  const aspect = searchParams.get("aspect") || undefined;
+  const salt = `${kind}:${aspect || ""}:`;
+
   try {
-    const hash = hashImageQuery(query);
+    const hash = hashImageQuery(query, salt);
     let stored = await getImageByHash(hash);
     if (!stored) {
-      const bytes = await generateGeminiImage(
-        query,
-        searchParams.get("aspect") || undefined,
-      );
+      const bytes = await generateImagenImage(query, {
+        aspectHint: aspect,
+        kind,
+      });
       stored = await saveImage({
         query,
         mimeType: bytes.mimeType,
         base64: bytes.base64,
+        salt,
       });
     }
 
@@ -35,6 +54,7 @@ export async function GET(req: Request) {
         dataUrl: toDataUrl(stored),
         mimeType: stored.mimeType,
         query: stored.query,
+        kind,
       });
     }
 
@@ -56,20 +76,31 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as { query?: string; aspect?: string };
+    const body = (await req.json()) as {
+      query?: string;
+      aspect?: string;
+      kind?: string;
+    };
     const query = body.query?.trim();
     if (!query) {
       return NextResponse.json({ error: "query is required" }, { status: 400 });
     }
 
-    const hash = hashImageQuery(query);
+    const kind = parseKind(body.kind);
+    const aspect = body.aspect;
+    const salt = `${kind}:${aspect || ""}:`;
+    const hash = hashImageQuery(query, salt);
     let stored = await getImageByHash(hash);
     if (!stored) {
-      const bytes = await generateGeminiImage(query, body.aspect);
+      const bytes = await generateImagenImage(query, {
+        aspectHint: aspect,
+        kind,
+      });
       stored = await saveImage({
         query,
         mimeType: bytes.mimeType,
         base64: bytes.base64,
+        salt,
       });
     }
 
@@ -79,6 +110,7 @@ export async function POST(req: Request) {
       dataUrl: toDataUrl(stored),
       mimeType: stored.mimeType,
       query: stored.query,
+      kind,
     });
   } catch (err) {
     console.error("[generate-image POST]", err);

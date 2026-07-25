@@ -11,21 +11,14 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-Configure Gemini keys in `.env.local` (`GEMINI_API_KEY_1` … `GEMINI_API_KEY_500`, and/or `GEMINI_API_KEYS`, and/or `GEMINI_API_KEYS_FILE` for one key per line). Luca rotates across the pool on 429/quota.
+**Production:** [deploy/VERCEL.md](deploy/VERCEL.md) (Vercel + `preview.lucaai.app` on DO) · [deploy/README.md](deploy/README.md) (single-server option)
 
-Switch providers in `.env.local` with `AI_PROVIDER` (restart dev after change):
-
-| Value | Behavior |
-|-------|----------|
-| `gemini` | Google AI Studio keys only |
-| `puter` | Puter only (`PUTER_AUTH_TOKEN` from [dashboard](https://puter.com/dashboard)) |
-| `auto` | Gemini first → Puter if Gemini fails |
-| `puter-first` | Puter first → Gemini if Puter fails |
+Configure Gemini keys in `.env.local` (`GEMINI_API_KEY_1` … `GEMINI_API_KEY_500`, and/or `GEMINI_API_KEYS`, and/or `GEMINI_API_KEYS_FILE` for one key per line). Set `GEMINI_MODEL` for the chat model. Luca rotates across the pool on 429/503/quota.
 
 ## Stack
 
 - Next.js App Router + Tailwind CSS v4
-- Tool-calling agent (`Prompt.md`) → live preview workspaces
+- Google AI Studio tool-calling agent (`Prompt.md`) → live preview workspaces
 - Built by [Luca Technology](.)
 
 ## License

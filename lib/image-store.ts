@@ -2,14 +2,30 @@ import { createHash } from "crypto";
 import { getDb } from "./mongodb";
 import type { StoredImage } from "./types";
 
-export function hashImageQuery(query: string): string {
-  return createHash("sha256").update(query.trim().toLowerCase()).digest("hex").slice(0, 24);
+declare global {
+  // eslint-disable-next-line no-var
+  var _mongoImagesIndexPromise: Promise<void> | undefined;
+}
+
+export function hashImageQuery(query: string, salt = ""): string {
+  return createHash("sha256")
+    .update(`${salt}${query.trim().toLowerCase()}`)
+    .digest("hex")
+    .slice(0, 24);
 }
 
 export async function getImagesCollection() {
   const db = await getDb();
   const col = db.collection<StoredImage>("images");
-  await col.createIndex({ hash: 1 }, { unique: true });
+  if (!global._mongoImagesIndexPromise) {
+    global._mongoImagesIndexPromise = col
+      .createIndex({ hash: 1 }, { unique: true })
+      .then(() => undefined)
+      .catch((err) => {
+        global._mongoImagesIndexPromise = undefined;
+        console.warn("[mongodb] images index ensure failed:", err);
+      });
+  }
   return col;
 }
 
@@ -28,9 +44,11 @@ export async function saveImage(input: {
   mimeType: string;
   base64: string;
   path?: string;
+  /** Include kind/aspect so logo vs photo caches don't collide. */
+  salt?: string;
 }): Promise<StoredImage> {
   const col = await getImagesCollection();
-  const hash = hashImageQuery(input.query);
+  const hash = hashImageQuery(input.query, input.salt || "");
   const existing = await col.findOne({ hash });
   if (existing) return existing;
 

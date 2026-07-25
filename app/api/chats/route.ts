@@ -1,13 +1,27 @@
 import { NextResponse } from "next/server";
+import { getSessionUser } from "@/lib/auth";
+import {
+  assertCanSpendCredit,
+  BillingError,
+  capThinkingForUser,
+  syncUserBilling,
+  toPublicBilling,
+} from "@/lib/billing";
 import { resolveAttachmentMetas } from "@/lib/attachments";
 import { createChat, listChats, serializeChat } from "@/lib/chats";
 import { parseThinkingLevel } from "@/lib/thinking-level";
+import { resolveLucaModelTier } from "@/lib/luca-model-tier";
+import type { PlanId } from "@/lib/billing/plans";
 
 export const runtime = "nodejs";
 
 export async function GET() {
   try {
-    const chats = await listChats();
+    const user = await getSessionUser();
+    if (!user) {
+      return NextResponse.json({ chats: [] });
+    }
+    const chats = await listChats(user.id);
     return NextResponse.json({ chats });
   } catch (err) {
     console.error("[chats GET]", err);
@@ -20,16 +34,25 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
+    const user = await getSessionUser();
+    if (!user) {
+      return NextResponse.json(
+        { error: "Sign in to start a chat." },
+        { status: 401 },
+      );
+    }
+
     const body = (await req.json()) as {
       prompt?: string;
       attachmentIds?: string[];
       thinkingLevel?: string;
+      lucaModelTier?: string;
     };
     const prompt = body.prompt?.trim() || "";
     const attachmentIds = Array.isArray(body.attachmentIds)
       ? body.attachmentIds.filter(Boolean)
       : [];
-    const thinkingLevel = parseThinkingLevel(body.thinkingLevel, "LOW");
+    const thinkingLevelRaw = parseThinkingLevel(body.thinkingLevel, "LOW");
 
     if (!prompt && !attachmentIds.length) {
       return NextResponse.json(
@@ -38,11 +61,42 @@ export async function POST(req: Request) {
       );
     }
 
+    const userDoc = await syncUserBilling(user.id);
+    if (!userDoc) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+
+    try {
+      assertCanSpendCredit(userDoc);
+    } catch (err) {
+      if (err instanceof BillingError) {
+        return NextResponse.json(
+          {
+            error: err.message,
+            code: err.code,
+            billing: toPublicBilling(userDoc),
+          },
+          { status: err.status },
+        );
+      }
+      throw err;
+    }
+
+    const thinkingLevel = capThinkingForUser(userDoc, thinkingLevelRaw);
+    const planId = (userDoc.planId ?? "free") as PlanId;
+    const lucaModelTier = resolveLucaModelTier(planId, body.lucaModelTier);
+
     const attachments = attachmentIds.length
       ? await resolveAttachmentMetas(attachmentIds)
       : [];
 
-    const chat = await createChat(prompt, attachments, thinkingLevel);
+    const chat = await createChat(
+      user.id,
+      prompt,
+      attachments,
+      thinkingLevel,
+      lucaModelTier,
+    );
     return NextResponse.json({
       chat: serializeChat(chat),
     });

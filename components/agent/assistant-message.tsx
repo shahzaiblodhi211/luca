@@ -1,15 +1,13 @@
 "use client";
 
-import {
-  Reasoning,
-  ReasoningContent,
-  ReasoningTrigger,
-} from "@/components/ai-elements/reasoning";
+import { MessageResponse } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ResponseMarkdown } from "./response-markdown";
 import { ActionChips } from "./action-chips";
 import { BuildPhase } from "./build-phase";
 import { BuildStatusBar } from "./build-status-bar";
+import { MessageToolbarActions } from "./message-toolbar-actions";
+import { ThinkingLine } from "./thinking-line";
 import type { AssistantPart, BuildPhasePart } from "@/lib/types";
 
 function hasVisibleContent(parts: AssistantPart[]) {
@@ -18,13 +16,14 @@ function hasVisibleContent(parts: AssistantPart[]) {
       return Boolean(p.text?.trim()) || p.files.length > 0 || p.commands.length > 0;
     }
     if (p.type === "text") return Boolean(p.text?.trim()) || p.text === "";
-    if (p.type === "thinking") return p.durationSec != null || p.text === "";
+    if (p.type === "thinking") return Boolean(p.text?.trim());
     if (p.type === "summary") return p.lines.length > 0;
     if (p.type === "status") return p.filesChanged > 0;
     if (p.type === "error") return Boolean(p.message?.trim());
     if (p.type === "preview") return p.ready;
     if (p.type === "actions") return p.actions.length > 0;
-    // Legacy
+    if (p.type === "env_request") return p.vars.length > 0;
+    if (p.type === "generated_image") return Boolean(p.url || p.dataUrl);
     if (p.type === "step") return true;
     if (p.type === "project") return p.files.length > 0;
     return false;
@@ -39,17 +38,47 @@ type Group =
   | { kind: "status"; part: Extract<AssistantPart, { type: "status" }> }
   | { kind: "error"; message: string }
   | { kind: "preview" }
-  | { kind: "actions"; part: Extract<AssistantPart, { type: "actions" }> };
+  | { kind: "actions"; part: Extract<AssistantPart, { type: "actions" }> }
+  | {
+      kind: "env_request";
+      part: Extract<AssistantPart, { type: "env_request" }>;
+    }
+  | {
+      kind: "generated_image";
+      part: Extract<AssistantPart, { type: "generated_image" }>;
+    };
 
 function groupParts(parts: AssistantPart[]): Group[] {
   const out: Group[] = [];
+  let think: Extract<AssistantPart, { type: "thinking" }> | null = null;
   for (const part of parts) {
+    if (part.type === "thinking") {
+      const sec = part.durationSec ?? 0;
+      if (!think) {
+        think = {
+          type: "thinking",
+          text: part.text || "",
+          durationSec: part.durationSec,
+        };
+      } else {
+        const mergedText = [think.text, part.text].filter(Boolean).join("\n\n");
+        think = {
+          type: "thinking",
+          text: mergedText,
+          durationSec:
+            think.durationSec == null && part.durationSec == null
+              ? undefined
+              : Math.max(1, (think.durationSec ?? 0) + sec),
+        };
+      }
+    }
+  }
+  if (think?.text?.trim()) out.push({ kind: "thinking", part: think });
+
+  for (const part of parts) {
+    if (part.type === "thinking") continue;
     if (part.type === "phase") {
       out.push({ kind: "phase", part });
-      continue;
-    }
-    if (part.type === "thinking") {
-      out.push({ kind: "thinking", part });
       continue;
     }
     if (part.type === "summary") {
@@ -83,7 +112,10 @@ function groupParts(parts: AssistantPart[]): Group[] {
       continue;
     }
     if (part.type === "actions") out.push({ kind: "actions", part });
-    // Drop legacy step/project chrome
+    if (part.type === "env_request") out.push({ kind: "env_request", part });
+    if (part.type === "generated_image") {
+      out.push({ kind: "generated_image", part });
+    }
   }
   return out;
 }
@@ -93,12 +125,14 @@ export function AssistantMessage({
   parts,
   onAction,
   onRetry,
+  onOpenEnv,
   isStreaming = false,
 }: {
   content: string;
   parts?: AssistantPart[];
   onAction?: (name: string) => void;
   onRetry?: () => void;
+  onOpenEnv?: (part: Extract<AssistantPart, { type: "env_request" }>) => void;
   isStreaming?: boolean;
 }) {
   if (isStreaming && (!parts?.length || !hasVisibleContent(parts))) {
@@ -123,25 +157,33 @@ export function AssistantMessage({
       );
     }
 
+    const copyText = [
+      ...groups
+        .filter((g): g is Extract<Group, { kind: "text" }> => g.kind === "text")
+        .map((g) => g.text),
+      ...groups
+        .filter(
+          (g): g is Extract<Group, { kind: "summary" }> => g.kind === "summary",
+        )
+        .flatMap((g) => g.lines),
+      content,
+    ]
+      .filter((t) => t?.trim())
+      .join("\n\n");
+
     return (
       <div className="space-y-3">
         {groups.map((g, i) => {
           if (g.kind === "thinking") {
-            const streamingThink = isStreaming && g.part.durationSec == null;
+            if (!g.part.text?.trim() && !isStreaming) return null;
             return (
-              <Reasoning
-                key={`think-${i}`}
-                isStreaming={streamingThink}
-                duration={g.part.durationSec}
-                defaultOpen={false}
-                autoClose
-              >
-                <ReasoningTrigger />
-                {/* Never show raw reasoning — duration line only */}
-                {g.part.text?.trim() ? (
-                  <ReasoningContent>{g.part.text}</ReasoningContent>
-                ) : null}
-              </Reasoning>
+              <ThinkingLine
+                key="thinking"
+                text={g.part.text}
+                isStreaming={isStreaming}
+                thinkingActive={isStreaming && g.part.durationSec == null}
+                durationSec={g.part.durationSec}
+              />
             );
           }
           if (g.kind === "phase") {
@@ -157,15 +199,14 @@ export function AssistantMessage({
             );
           }
           if (g.kind === "summary") {
+            const md = g.lines.map((line) => `- ${line}`).join("\n");
             return (
-              <ul
+              <MessageResponse
                 key={`summary-${i}`}
-                className="space-y-1 border-l-2 border-zinc-700 pl-3 text-sm text-zinc-300"
+                className="text-sm text-zinc-300"
               >
-                {g.lines.map((line) => (
-                  <li key={line}>{line}</li>
-                ))}
-              </ul>
+                {md}
+              </MessageResponse>
             );
           }
           if (g.kind === "status") {
@@ -189,16 +230,7 @@ export function AssistantMessage({
               </p>
             );
           }
-          if (g.kind === "preview") {
-            return (
-              <p
-                key={`preview-${i}`}
-                className="text-[11px] text-zinc-500"
-              >
-                Preview ready
-              </p>
-            );
-          }
+          if (g.kind === "preview") return null;
           if (g.kind === "text") {
             if (!g.text && !isStreaming) return null;
             return (
@@ -219,8 +251,61 @@ export function AssistantMessage({
               />
             );
           }
+          if (g.kind === "env_request") {
+            const saved = g.part.status === "saved";
+            return (
+              <div
+                key={`env-${g.part.id}`}
+                className="rounded-lg border border-border bg-muted/30 px-3.5 py-3"
+              >
+                <p className="text-sm font-medium text-foreground">
+                  {g.part.title}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {saved
+                    ? `Saved ${g.part.savedKeys?.length ?? 0} value(s) to .env.local`
+                    : `${g.part.vars.length} environment variable${g.part.vars.length === 1 ? "" : "s"} needed for the backend`}
+                  {g.part.database ? ` · ${g.part.database}` : ""}
+                </p>
+                <button
+                  type="button"
+                  className="mt-2.5 inline-flex h-8 items-center rounded-md border border-input bg-background px-3 text-xs font-medium shadow-sm hover:bg-accent"
+                  onClick={() => onOpenEnv?.(g.part)}
+                >
+                  {saved ? "Edit environment" : "Enter environment variables"}
+                </button>
+              </div>
+            );
+          }
+          if (g.kind === "generated_image") {
+            const src = g.part.dataUrl || g.part.url;
+            return (
+              <figure
+                key={`img-${g.part.id}`}
+                className="overflow-hidden rounded-xl border border-border bg-muted/20"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={src}
+                  alt={g.part.caption || g.part.query || "Generated image"}
+                  className="max-h-[min(70vh,560px)] w-full object-contain bg-zinc-950"
+                />
+                {(g.part.caption || g.part.kind) && (
+                  <figcaption className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+                    {g.part.caption ||
+                      (g.part.kind === "logo"
+                        ? "Generated logo"
+                        : "Generated image")}
+                  </figcaption>
+                )}
+              </figure>
+            );
+          }
           return null;
         })}
+        {!isStreaming ? (
+          <MessageToolbarActions content={copyText} onRetry={onRetry} />
+        ) : null}
       </div>
     );
   }
@@ -232,5 +317,13 @@ export function AssistantMessage({
     .replace(/<Action\b[^>]*\/?>/gi, "")
     .replace(/<DeleteFile\b[^>]*\/?>/gi, "")
     .trim();
-  return <ResponseMarkdown>{legacy || content}</ResponseMarkdown>;
+  const body = legacy || content;
+  return (
+    <div className="space-y-2">
+      <ResponseMarkdown>{body}</ResponseMarkdown>
+      {!isStreaming ? (
+        <MessageToolbarActions content={body} onRetry={onRetry} />
+      ) : null}
+    </div>
+  );
 }

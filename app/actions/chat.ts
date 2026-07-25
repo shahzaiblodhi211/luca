@@ -7,23 +7,30 @@ import {
   type RunChatInput,
 } from "@/lib/agent/run-chat";
 
-/** Keep-alive only while waiting for the first real Gemini tokens. */
-const HEARTBEAT_MS = 5_000;
+/**
+ * Keep-alive while waiting for Gemini (key hunt, 503 rotate, thinking).
+ * Must stay under AI SDK's "slow to update" threshold (~3s).
+ */
+const HEARTBEAT_MS = 1_500;
 
+/**
+ * Only stop heartbeats once the UI is getting frequent real progress.
+ * Do NOT stop on `thinking` — that event fires once then goes silent for
+ * the whole model-think + tool-buffer window (the bug that froze the UI).
+ */
 const STOPS_HEARTBEAT = new Set<AgentStreamEvent["type"]>([
-  "thinking",
-  "thinking_done",
   "phase",
   "file",
   "command",
   "text",
   "text_delta",
+  "thinking_delta",
   "summary",
-  "status",
   "preview",
   "image",
   "package",
   "actions",
+  "env_request",
   "done",
   "error",
 ]);
@@ -49,8 +56,8 @@ export async function streamChatAction(input: RunChatInput) {
     }
   };
 
-  // First byte immediately — UI shimmer while Mongo / key hunt / Gemini connect
-  push({ type: "thinking", text: "" });
+  // Immediate keep-alive — do NOT use `thinking` here (that used to kill heartbeats)
+  push({ type: "ping", t: Date.now() });
 
   const heartbeat = setInterval(() => {
     if (closed || !heartbeats) return;

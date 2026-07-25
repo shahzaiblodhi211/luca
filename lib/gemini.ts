@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "async_hooks";
 import { getGeminiKeys } from "./gemini-keys";
 import { getSystemPrompt } from "./system-prompt";
 import { getAttachmentsByIds } from "./attachments";
@@ -5,11 +6,36 @@ import type { ChatAttachment } from "./types";
 
 const RETRYABLE_STATUS = new Set([403, 429, 500, 502, 503, 504]);
 
+/** SDK / @google/genai shape (camelCase). REST openStream maps to snake_case. */
 type GeminiPart =
   | { text: string }
-  | { inline_data: { mime_type: string; data: string } };
+  | { inlineData: { mimeType: string; data: string } };
 
 type GeminiContent = { role: "user" | "model"; parts: GeminiPart[] };
+
+function inlineImagePart(
+  mimeType: string,
+  data: string | { toString?: (enc?: string) => string } | null | undefined,
+): GeminiPart | null {
+  let raw = "";
+  if (typeof data === "string") raw = data;
+  else if (data && typeof data.toString === "function") {
+    // Mongo Binary / Buffer edge cases
+    try {
+      raw = data.toString("base64");
+    } catch {
+      raw = String(data);
+    }
+  }
+  const b64 = raw.replace(/^data:[^;]+;base64,/, "").trim();
+  if (!b64) return null;
+  return {
+    inlineData: {
+      mimeType: mimeType || "image/jpeg",
+      data: b64,
+    },
+  };
+}
 
 export type ChatTurn = {
   role: "user" | "assistant";
@@ -27,8 +53,21 @@ function getKeys(): string[] {
   return getGeminiKeys();
 }
 
+const geminiModelStore = new AsyncLocalStorage<string | undefined>();
+
 export function getGeminiModel(): string {
-  return process.env.GEMINI_MODEL?.trim() || "gemini-3.5-flash";
+  return (
+    geminiModelStore.getStore() ??
+    process.env.GEMINI_MODEL?.trim() ??
+    "gemini-3.5-flash-lite"
+  );
+}
+
+export function runWithGeminiModel<T>(
+  model: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return geminiModelStore.run(model, fn);
 }
 
 function getModel(): string {
@@ -59,12 +98,8 @@ async function buildPartsForTurn(
 
   if (opts.includeBinaryAttachments && msg.inlineImages?.length) {
     for (const img of msg.inlineImages) {
-      parts.push({
-        inline_data: {
-          mime_type: img.mimeType || "image/jpeg",
-          data: img.base64,
-        },
-      });
+      const media = inlineImagePart(img.mimeType || "image/jpeg", img.base64);
+      if (media) parts.push(media);
       parts.push({
         text: [
           `[FULL-PAGE SCREENSHOT — ${img.label || "DESIGN SPEC"}]`,
@@ -88,21 +123,27 @@ async function buildPartsForTurn(
 
       if (meta.kind === "image") {
         const safeName = meta.name.replace(/[^a-zA-Z0-9._-]/g, "-");
-        if (opts.includeBinaryAttachments && file) {
-          parts.push({
-            inline_data: {
-              mime_type: file.mimeType || "image/jpeg",
-              data: file.base64,
-            },
-          });
+        if (opts.includeBinaryAttachments && file?.base64) {
+          const media = inlineImagePart(
+            file.mimeType || "image/jpeg",
+            file.base64,
+          );
+          if (media) parts.push(media);
+          else {
+            console.warn(
+              `[gemini] skip empty image bytes for attachment ${meta.id}`,
+            );
+          }
         }
         parts.push({
           text: [
             `[User uploaded image: ${meta.name}]`,
             `URL: ${meta.url}`,
-            opts.includeBinaryAttachments
+            opts.includeBinaryAttachments && file?.base64
               ? "INSPECT visually like DevTools: identify layout regions, spacing, type scale, colors, components. Recreate a pixel-faithful clone when asked."
-              : "(image was attached earlier — use conversation context; binary omitted for speed)",
+              : opts.includeBinaryAttachments
+                ? "(image binary missing from storage — use the URL / prior context)"
+                : "(image was attached earlier — use conversation context; binary omitted for speed)",
             "To embed in a Code Project:",
             "```png isHidden file=\"public/images/" +
               safeName +
@@ -130,16 +171,12 @@ async function buildPartsForTurn(
         });
         if (
           opts.includeBinaryAttachments &&
-          file &&
+          file?.base64 &&
           (file.mimeType === "application/pdf" ||
             file.name.toLowerCase().endsWith(".pdf"))
         ) {
-          parts.push({
-            inline_data: {
-              mime_type: "application/pdf",
-              data: file.base64,
-            },
-          });
+          const media = inlineImagePart("application/pdf", file.base64);
+          if (media) parts.push(media);
         }
       }
     }
@@ -176,7 +213,7 @@ export async function toGeminiContents(messages: ChatTurn[]): Promise<GeminiCont
     const parts = await buildPartsForTurn(msg, {
       includeBinaryAttachments: i === lastUserWithAttachments || i === messages.length - 1,
     });
-    const hasMedia = parts.some((p) => "inline_data" in p);
+    const hasMedia = parts.some((p) => "inlineData" in p);
     const last = contents[contents.length - 1];
 
     if (last && last.role === role && !hasMedia && role === "model") {
@@ -206,10 +243,28 @@ function isRetryableError(status: number, body: string): boolean {
   );
 }
 
+/** REST generateContent still wants snake_case part fields. */
+function toRestContents(contents: GeminiContent[]) {
+  return contents.map((c) => ({
+    role: c.role,
+    parts: c.parts.map((p) => {
+      if ("inlineData" in p && p.inlineData) {
+        return {
+          inline_data: {
+            mime_type: p.inlineData.mimeType,
+            data: p.inlineData.data,
+          },
+        };
+      }
+      return p;
+    }),
+  }));
+}
+
 async function openStream(apiKey: string, messages: ChatTurn[]): Promise<Response> {
   const model = getModel();
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
-  const contents = await toGeminiContents(messages);
+  const contents = toRestContents(await toGeminiContents(messages));
 
   return fetch(url, {
     method: "POST",

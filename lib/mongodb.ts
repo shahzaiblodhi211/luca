@@ -4,6 +4,8 @@ import type { ChatDoc } from "./types";
 declare global {
   // eslint-disable-next-line no-var
   var _mongoClientPromise: Promise<MongoClient> | undefined;
+  // eslint-disable-next-line no-var
+  var _mongoChatsIndexPromise: Promise<void> | undefined;
 }
 
 function getUri() {
@@ -31,6 +33,17 @@ export async function getDb(): Promise<Db> {
 export async function getChatsCollection(): Promise<Collection<ChatDoc>> {
   const db = await getDb();
   const col = db.collection<ChatDoc>("chats");
-  await col.createIndex({ updatedAt: -1 });
+  // Index once per process — createIndex on every request added ~500ms+ latency
+  if (!global._mongoChatsIndexPromise) {
+    global._mongoChatsIndexPromise = Promise.all([
+      col.createIndex({ updatedAt: -1 }),
+      col.createIndex({ userId: 1, updatedAt: -1 }),
+    ])
+      .then(() => undefined)
+      .catch((err) => {
+        global._mongoChatsIndexPromise = undefined;
+        console.warn("[mongodb] chats index ensure failed:", err);
+      });
+  }
   return col;
 }

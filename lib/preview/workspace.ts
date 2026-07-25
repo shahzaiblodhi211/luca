@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import {
@@ -17,6 +18,7 @@ import {
   sanitizeChatId,
   workspaceDirFor,
 } from "./paths";
+import { ensureInspectorInLayout } from "./luca-inspector-layout";
 import {
   resolveNextUiStubFiles,
   SCAFFOLD_GITIGNORE,
@@ -28,6 +30,13 @@ import {
   SCAFFOLD_TSCONFIG,
   SCAFFOLD_UTILS,
 } from "./scaffold";
+
+function loadLucaInspectorScript(): string {
+  return readFileSync(
+    path.join(process.cwd(), "lib/preview/luca-inspector.js"),
+    "utf8",
+  );
+}
 
 export type SyncWorkspaceResult = {
   dir: string;
@@ -267,8 +276,11 @@ export async function syncPreviewWorkspace(
     if (!layout.includes("suppressHydrationWarning")) {
       layout = layout.replace(/<html\b/, "<html suppressHydrationWarning");
     }
+    layout = ensureInspectorInLayout(layout);
     byPath.set("app/layout.tsx", layout);
   }
+
+  byPath.set("public/luca-inspector.js", loadLucaInspectorScript());
 
   const workspacePkg = {
     name: `luca-preview-${id}`,

@@ -10,10 +10,24 @@ import {
   appendUserMessage,
   getChat,
   setChatThinkingLevel,
+  setChatLucaModelTier,
 } from "@/lib/chats";
 import { resolveAttachmentMetas } from "@/lib/attachments";
 import { buildTurnsWithProjectContext } from "@/lib/project-context";
 import { parseThinkingLevel } from "@/lib/thinking-level";
+import {
+  BillingError,
+  capThinkingForUser,
+  debitChatCredit,
+  getGeminiModelForUser,
+  refundChatCredit,
+  syncUserBilling,
+} from "@/lib/billing";
+import { runWithGeminiModel } from "@/lib/gemini";
+import {
+  resolveLucaModelTier,
+} from "@/lib/luca-model-tier";
+import type { PlanId } from "@/lib/billing/plans";
 import type {
   AssistantPart,
   BuildPhasePart,
@@ -73,27 +87,65 @@ function applyEventToAccumulator(event: AgentStreamEvent, acc: Acc) {
     case "ping":
     case "preview":
       break;
-    case "thinking":
-      // Duration-only — never store model reasoning text
-      acc.timeline.push({
-        type: "thinking",
-        text: "",
-        durationSec: event.durationSec,
-      });
-      break;
-    case "thinking_delta":
-      // Ignored — raw reasoning is not persisted
-      break;
-    case "thinking_done": {
-      for (let i = acc.timeline.length - 1; i >= 0; i--) {
-        if (acc.timeline[i].type === "thinking") {
-          acc.timeline[i] = {
+    case "thinking": {
+      const idx = acc.timeline.findIndex((p) => p.type === "thinking");
+      if (idx >= 0) {
+        if (event.durationSec != null) {
+          const cur = acc.timeline[idx];
+          acc.timeline[idx] = {
             type: "thinking",
-            text: "",
+            text: cur.type === "thinking" ? cur.text : "",
             durationSec: event.durationSec,
           };
-          break;
         }
+      } else {
+        acc.timeline.unshift({
+          type: "thinking",
+          text: "",
+          durationSec: event.durationSec,
+        });
+      }
+      break;
+    }
+    case "thinking_delta": {
+      const idx = acc.timeline.findIndex((p) => p.type === "thinking");
+      if (idx >= 0) {
+        const cur = acc.timeline[idx];
+        if (cur.type === "thinking") {
+          acc.timeline[idx] = {
+            type: "thinking",
+            text: cur.text + event.text,
+            durationSec: cur.durationSec,
+          };
+        }
+      } else {
+        acc.timeline.unshift({
+          type: "thinking",
+          text: event.text,
+        });
+      }
+      break;
+    }
+    case "thinking_done": {
+      const add = Math.max(1, event.durationSec || 1);
+      const idx = acc.timeline.findIndex((p) => p.type === "thinking");
+      if (idx >= 0) {
+        const cur = acc.timeline[idx];
+        const prevSec =
+          cur.type === "thinking" && cur.durationSec != null
+            ? cur.durationSec
+            : 0;
+        acc.timeline[idx] = {
+          type: "thinking",
+          text: cur.type === "thinking" ? cur.text : "",
+          durationSec: prevSec > 0 ? prevSec + add : add,
+        };
+      } else {
+        acc.timeline.unshift({
+          type: "thinking",
+          text: "",
+          durationSec: add,
+        });
       }
       break;
     }
@@ -185,6 +237,11 @@ function applyEventToAccumulator(event: AgentStreamEvent, acc: Acc) {
           query: event.query,
           aspectHint: event.aspect,
           url: event.url,
+          dataUrl: event.dataUrl,
+          kind: event.kind,
+          imageId: event.url?.startsWith("/api/images/")
+            ? event.url.slice("/api/images/".length)
+            : undefined,
         },
       ];
       break;
@@ -230,6 +287,17 @@ function applyEventToAccumulator(event: AgentStreamEvent, acc: Acc) {
     case "actions":
       acc.actions = event.actions;
       break;
+    case "env_request":
+      acc.timeline.push({
+        type: "env_request",
+        id: event.id,
+        title: event.title,
+        description: event.description,
+        database: event.database,
+        vars: event.vars,
+        status: "pending",
+      });
+      break;
     case "done":
       acc.projectId = event.projectId || acc.projectId;
       acc.content = event.content || acc.content;
@@ -239,6 +307,14 @@ function applyEventToAccumulator(event: AgentStreamEvent, acc: Acc) {
         query: i.query,
         aspectHint: i.aspect,
         url: "url" in i ? (i as { url?: string }).url : undefined,
+        dataUrl: "dataUrl" in i ? (i as { dataUrl?: string }).dataUrl : undefined,
+        kind: "kind" in i ? (i as { kind?: ImageJob["kind"] }).kind : undefined,
+        imageId:
+          "url" in i &&
+          typeof (i as { url?: string }).url === "string" &&
+          (i as { url: string }).url.startsWith("/api/images/")
+            ? (i as { url: string }).url.slice("/api/images/".length)
+            : undefined,
       }));
       acc.deleted = event.deleted;
       acc.actions = event.actions;
@@ -261,8 +337,7 @@ function applyEventToAccumulator(event: AgentStreamEvent, acc: Acc) {
 }
 
 function partsFromAcc(acc: Acc) {
-  if (acc.doneParts?.length) return acc.doneParts;
-  return agentStateToParts({
+  const fromTimeline = agentStateToParts({
     projectId: acc.projectId || "project",
     thinking: acc.thinking,
     files: new Map(
@@ -280,11 +355,17 @@ function partsFromAcc(acc: Acc) {
     phaseSeq: 1,
     finished: true,
     cloneRequiredTokens: [],
-    requireFullStore: false,
-    storeFinishRejects: 0,
     editFailStreak: 0,
     editFailPath: "",
+    envRequested: false,
   });
+
+  if (!acc.doneParts?.length) return fromTimeline;
+
+  // done.parts can omit thinking — always keep the sealed think line from the stream
+  const think = fromTimeline.find((p) => p.type === "thinking");
+  const rest = acc.doneParts.filter((p) => p.type !== "thinking");
+  return think ? [think, ...rest] : rest;
 }
 
 export type RunChatInput = {
@@ -293,6 +374,7 @@ export type RunChatInput = {
   attachmentIds?: string[];
   isFirst?: boolean;
   thinkingLevel?: string;
+  lucaModelTier?: string;
 };
 
 /**
@@ -304,26 +386,56 @@ export async function runChatGeneration(
   onEvent: (event: AgentStreamEvent) => void,
 ): Promise<void> {
   const chatId = input.chatId?.trim();
-  const message = input.message?.trim();
-  if (!chatId || !message) {
-    throw new Error("chatId and message required");
+  const attachmentIds = input.attachmentIds ?? [];
+  if (!chatId) {
+    throw new Error("chatId required");
   }
 
-  let chat = await getChat(chatId);
+  const { getSessionUser } = await import("@/lib/auth");
+  const user = await getSessionUser();
+  if (!user) throw new Error("Sign in to continue this chat.");
+
+  let chat = await getChat(chatId, user.id);
   if (!chat) throw new Error("Chat not found");
 
-  const thinkingLevel = parseThinkingLevel(
+  const userDoc = await syncUserBilling(user.id);
+  if (!userDoc) throw new Error("User not found");
+
+  let thinkingLevel = parseThinkingLevel(
     input.thinkingLevel ?? chat.thinkingLevel,
   );
+  thinkingLevel = capThinkingForUser(userDoc, thinkingLevel);
   if (chat.thinkingLevel !== thinkingLevel) {
     await setChatThinkingLevel(chatId, thinkingLevel);
     chat = { ...chat, thinkingLevel };
   }
 
-  const attachmentIds = input.attachmentIds ?? [];
+  const planId = (userDoc.planId ?? "free") as PlanId;
+  const lucaModelTier = resolveLucaModelTier(
+    planId,
+    input.lucaModelTier ?? chat.lucaModelTier,
+  );
+  if (chat.lucaModelTier !== lucaModelTier) {
+    await setChatLucaModelTier(chatId, lucaModelTier);
+    chat = { ...chat, lucaModelTier };
+  }
+
+  await debitChatCredit(user.id);
+  let credited = true;
+
   const attachments = attachmentIds.length
     ? await resolveAttachmentMetas(attachmentIds)
     : [];
+
+  const message =
+    input.message?.trim() ||
+    (attachments.length
+      ? `Please use the uploaded file${attachments.length > 1 ? "s" : ""}.`
+      : "");
+
+  if (!message && !attachments.length) {
+    throw new Error("message or attachments required");
+  }
 
   if (!input.isFirst) {
     await appendUserMessage(chatId, message, attachments);
@@ -344,19 +456,24 @@ export async function runChatGeneration(
     });
   }
 
-  const stream = await streamAgentEvents(
-    turns,
-    chat.projectId,
-    chat.files,
-    chat.packages ?? null,
-    thinkingLevel,
-  );
+  const model = getGeminiModelForUser(userDoc, lucaModelTier);
 
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
+  try {
+    const stream = await runWithGeminiModel(model, () =>
+      streamAgentEvents(
+        turns,
+        chat.projectId,
+        chat.files,
+        chat.packages ?? null,
+        thinkingLevel,
+      ),
+    );
 
-  const acc: Acc = {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    const acc: Acc = {
     content: "",
     projectId: chat.projectId,
     files: new Map(chat.files.map((f) => [f.path, f])),
@@ -402,4 +519,10 @@ export async function runChatGeneration(
     imageJobs: acc.images,
     deleted: acc.deleted,
   });
+  } catch (err) {
+    if (credited && !(err instanceof BillingError)) {
+      await refundChatCredit(user.id);
+    }
+    throw err;
+  }
 }

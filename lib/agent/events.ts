@@ -9,7 +9,7 @@ import type {
 } from "@/lib/types";
 
 export type AgentStreamEvent =
-  /** Open a duration-only thinking shell (no reasoning text). */
+  /** Open a thinking shell; reasoning streams via thinking_delta. */
   | { type: "thinking"; text: string; durationSec?: number }
   /** @deprecated Not streamed to clients — kept for parse compat */
   | { type: "thinking_delta"; text: string }
@@ -28,7 +28,26 @@ export type AgentStreamEvent =
       code?: string;
       linesDelta?: number;
     }
-  | { type: "image"; path: string; query: string; aspect?: string; url?: string }
+  | {
+      type: "image";
+      path: string;
+      query: string;
+      aspect?: string;
+      url?: string;
+      /** data: URL for live preview injection (not for source files). */
+      dataUrl?: string;
+      kind?: "photo" | "logo" | "illustration";
+    }
+  /** Chat-only generated image (show in assistant bubble — not a project asset). */
+  | {
+      type: "chat_image";
+      id: string;
+      url: string;
+      dataUrl?: string;
+      query: string;
+      kind?: "photo" | "logo" | "illustration";
+      caption?: string;
+    }
   /** @deprecated Prefer file action=delete */
   | { type: "delete"; path: string }
   /** Package map sync — also mirrored as command events */
@@ -60,6 +79,16 @@ export type AgentStreamEvent =
     }
   | { type: "actions"; actions: AgentAction[] }
   | {
+      type: "env_request";
+      id: string;
+      title: string;
+      description?: string;
+      database?: string;
+      vars: import("@/lib/types").EnvVarSpec[];
+      /** Written project paths (.env.local / .env.example). */
+      paths: string[];
+    }
+  | {
       type: "clone_ref";
       attachments: ChatAttachment[];
       sourceUrl?: string;
@@ -74,6 +103,8 @@ export type AgentStreamEvent =
         query: string;
         aspect?: string;
         url?: string;
+        dataUrl?: string;
+        kind?: "photo" | "logo" | "illustration";
       }>;
       deleted: string[];
       actions: AgentAction[];
@@ -129,6 +160,8 @@ export function agentStateToImageJobs(state: AgentState) {
       query: f.query!,
       aspect: f.aspect,
       url: f.imageUrl,
+      dataUrl: f.imageDataUrl,
+      kind: f.imageKind,
     }));
 }
 
@@ -141,23 +174,37 @@ export function agentStateToContent(state: AgentState): string {
 }
 
 export function agentStateToParts(state: AgentState): AssistantPart[] {
-  const parts: AssistantPart[] = [...state.timeline].filter((p) => {
-    // Drop legacy noisy project/step chrome from persisted timeline
-    if (p.type === "project") return false;
-    if (p.type === "step") return false;
-    // Never persist raw reasoning text
-    if (p.type === "thinking") {
-      return p.durationSec != null;
-    }
-    return true;
-  });
+  let thinkSec = 0;
+  let thinkText = "";
+  let hadThink = false;
+  const parts: AssistantPart[] = [];
 
-  // Ensure thinking parts never leak model text
-  for (let i = 0; i < parts.length; i++) {
-    const p = parts[i];
-    if (p.type === "thinking" && p.text) {
-      parts[i] = { type: "thinking", text: "", durationSec: p.durationSec };
+  for (const p of state.timeline) {
+    if (p.type === "project" || p.type === "step") continue;
+    if (p.type === "thinking") {
+      hadThink = true;
+      thinkSec += Math.max(0, p.durationSec ?? 0);
+      if (p.text?.trim()) {
+        thinkText = thinkText
+          ? `${thinkText}\n\n${p.text.trim()}`
+          : p.text.trim();
+      }
+      continue;
     }
+    parts.push(p);
+  }
+
+  if (!thinkText && state.thinking.length) {
+    thinkText = state.thinking.join("\n\n");
+    hadThink = true;
+  }
+
+  if (hadThink && thinkText.trim()) {
+    parts.unshift({
+      type: "thinking",
+      text: thinkText,
+      durationSec: Math.max(1, thinkSec || 1),
+    });
   }
 
   if (state.actions.length && !parts.some((p) => p.type === "actions")) {

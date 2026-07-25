@@ -4,42 +4,34 @@ import {
   getGeminiKeys,
   hasAvailableGeminiKey,
   isCapacityMessage,
+  isDailyQuotaMessage,
   isRateLimitMessage,
   isRetryableGeminiError,
   isRetryableGeminiMessage,
   markGeminiKeyHot,
+  noteGeminiKeySuccess,
   parseGeminiStatus,
   pickGeminiKeyIndex,
   releaseGeminiKey,
   rotateGeminiKey,
 } from "@/lib/gemini-keys";
-import { toGeminiContents, type ChatTurn } from "@/lib/gemini";
+import { getGeminiModel, toGeminiContents, type ChatTurn } from "@/lib/gemini";
 import { buildDoneEvent, type AgentStreamEvent } from "@/lib/agent/events";
 import {
   streamGeminiGenerateContent,
+  sanitizeGeminiContents,
   type GeminiContent,
   type GeminiPart,
   type GeminiStreamResult,
 } from "./gemini-stream";
-import { streamPuterGenerateContent } from "./puter-stream";
 import {
   createAgentState,
   executeAgentTool,
   type AgentState,
 } from "./tools";
-import {
-  storeSuiteStatus,
-  wantsFullStore,
-} from "@/lib/agent/store-suite";
 import { sanitizeGeneratedCode } from "@/lib/agent/sanitize-code";
 import { chunkForStream, emitPacedText } from "@/lib/agent/pace-text";
 import { ensurePhaseOnTimeline } from "@/lib/agent/build-timeline";
-import {
-  describeAiProviderMode,
-  getAiProviderMode,
-  getPuterTokens,
-  isPuterConfigured,
-} from "@/lib/puter";
 import type { ProjectFile } from "@/lib/types";
 
 const MAX_STEPS = 100;
@@ -53,13 +45,9 @@ async function emitToolEvents(
       await emitPacedText(emit, event.text);
       continue;
     }
-    // Never stream raw thinking text — duration-only events pass through
-    if (event.type === "thinking" && event.text.trim()) {
-      emit({
-        type: "thinking",
-        text: "",
-        durationSec: event.durationSec,
-      });
+    // Stream reasoning into the UI panel; strip only duplicate full-text thinking shells
+    if (event.type === "thinking" && event.text.trim() && event.durationSec == null) {
+      emit({ type: "thinking", text: "" });
       continue;
     }
     emit(event);
@@ -75,35 +63,54 @@ type StreamHandlers = {
   ) => void;
 };
 
-async function callGeminiStreamWithRotation(
+/** Agent always uses tools — native Gemini thinking + `think` tool both stay enabled. */
+function shouldUseAgentTools(
+  _turns: ChatTurn[],
+  _existingFiles?: ProjectFile[] | null,
+): boolean {
+  return true;
+}
+
+async function emitThinkToolPlan(
+  emit: (event: AgentStreamEvent) => void,
+  text: string,
+) {
+  const body = text.trim();
+  if (!body) return;
+  emit({ type: "thinking", text: "" });
+  for (const piece of chunkForStream(body, 48)) {
+    emit({ type: "thinking_delta", text: piece });
+  }
+}
+
+/** Google AI Studio only — sticky key until fail, then random cool key. */
+async function callModelStream(
   contents: GeminiContent[],
   handlers: StreamHandlers,
   thinkingLevel?: string | null,
+  useAgentTools = true,
 ): Promise<GeminiStreamResult> {
+  console.info(`[agent] provider=gemini model=${getGeminiModel()}`);
+
   let lastError = "All Gemini keys failed";
   let attempts = 0;
-  let consecutiveCapacity = 0;
   const skipped = new Set<number>();
-  /** Bail early on widespread 503 so Puter fallback can take over quickly. */
-  const CAPACITY_BAIL = 8;
+  /** Try many keys quickly — never sit on a shared-pool RPM wait. */
+  const MAX_ATTEMPTS = 16;
 
   while (true) {
     const keys = getGeminiKeys();
     const stats = geminiKeyPoolStats("chat");
-    const maxAttempts = Math.max(1, keys.length);
-    if (attempts >= maxAttempts || skipped.size >= keys.length) {
-      break;
-    }
-    if (consecutiveCapacity >= CAPACITY_BAIL) {
-      lastError = `Gemini model high-demand (503) on ${consecutiveCapacity} keys — trying Puter fallback`;
-      console.warn(`[agent] ${lastError}`);
+
+    if (attempts >= MAX_ATTEMPTS || skipped.size >= keys.length) {
       break;
     }
 
     if (!hasAvailableGeminiKey("chat")) {
+      // No cool keys left (RPM skips + RPD parks). Don't block for ~40s — fail fast.
       throw new Error(
         formatGeminiUserError(
-          `All Gemini API keys are rate-limited or out of daily quota (pool=${stats.total}, hot=${stats.hot}).`,
+          "All keys cooling or out of daily quota — wait or retry after UTC midnight.",
         ),
       );
     }
@@ -111,7 +118,7 @@ async function callGeminiStreamWithRotation(
     const keyIndex = pickGeminiKeyIndex("chat");
     if (skipped.has(keyIndex)) {
       releaseGeminiKey("chat", keyIndex);
-      rotateGeminiKey("chat");
+      rotateGeminiKey("chat", keyIndex);
       attempts += 1;
       continue;
     }
@@ -127,8 +134,11 @@ async function callGeminiStreamWithRotation(
         contents,
         handlers,
         thinkingLevel,
+        { useAgentTools },
       );
       console.info(`[agent] gemini key#${keyIndex + 1} stream ok`);
+      // Stick to this key; soft-rotate before ~15 RPM burns one free-tier key
+      noteGeminiKeySuccess("chat", keyIndex);
       return result;
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
@@ -144,16 +154,23 @@ async function callGeminiStreamWithRotation(
       if (!retryable) throw new Error(formatGeminiUserError(lastError));
 
       skipped.add(keyIndex);
-      if (isCapacityMessage(lastError)) {
-        consecutiveCapacity += 1;
+
+      if (isDailyQuotaMessage(lastError)) {
+        // RPD burned — park until next UTC day only
+        markGeminiKeyHot("chat", keyIndex, {
+          daily: true,
+          message: lastError,
+        });
+      } else if (isCapacityMessage(lastError)) {
+        // 503 — short skip, random next key immediately
         markGeminiKeyHot("chat", keyIndex, { message: lastError });
       } else if (isRateLimitMessage(lastError)) {
-        consecutiveCapacity = 0;
-        markGeminiKeyHot("chat", keyIndex, { message: lastError });
+        // RPM / RESOURCE_EXHAUSTED — short skip only, NEVER next-day unless RPD
+        markGeminiKeyHot("chat", keyIndex, { ms: 55_000 });
       } else {
-        consecutiveCapacity = 0;
         markGeminiKeyHot("chat", keyIndex, { ms: 55_000 });
       }
+      // Loop continues immediately on a random cool key
     } finally {
       releaseGeminiKey("chat", keyIndex);
     }
@@ -162,129 +179,7 @@ async function callGeminiStreamWithRotation(
   throw new Error(formatGeminiUserError(lastError));
 }
 
-async function callPuterStreamWithRotation(
-  contents: GeminiContent[],
-  handlers: StreamHandlers,
-): Promise<GeminiStreamResult> {
-  const tokens = getPuterTokens();
-  if (!tokens.length) {
-    throw new Error(
-      "Puter is not configured. Add PUTER_AUTH_TOKEN from https://puter.com/dashboard",
-    );
-  }
-
-  let lastError = "All Puter tokens failed";
-  for (let i = 0; i < tokens.length; i++) {
-    console.info(`[agent] puter token#${i + 1}/${tokens.length}`);
-    try {
-      const result = await streamPuterGenerateContent(
-        tokens[i],
-        contents,
-        handlers,
-      );
-      console.info(`[agent] puter token#${i + 1} stream ok`);
-      return result;
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
-      console.warn(
-        `[agent] puter token#${i + 1} fail`,
-        lastError.slice(0, 160),
-      );
-    }
-  }
-  throw new Error(
-    lastError.length > 220 ? `${lastError.slice(0, 200)}…` : lastError,
-  );
-}
-
-/** Provider selected by `AI_PROVIDER` in `.env.local` (restart dev after change). */
-async function callModelStream(
-  contents: GeminiContent[],
-  handlers: StreamHandlers,
-  thinkingLevel?: string | null,
-): Promise<GeminiStreamResult> {
-  const mode = getAiProviderMode();
-  const puterOk = isPuterConfigured();
-  console.info(`[agent] provider=${describeAiProviderMode(mode)}`);
-
-  if (mode === "puter") {
-    if (!puterOk) {
-      throw new Error(
-        "AI_PROVIDER=puter but PUTER_AUTH_TOKEN is missing. Add it in .env.local",
-      );
-    }
-    return callPuterStreamWithRotation(contents, handlers);
-  }
-
-  if (mode === "gemini") {
-    return callGeminiStreamWithRotation(contents, handlers, thinkingLevel);
-  }
-
-  if (mode === "puter-first") {
-    if (!puterOk) {
-      console.warn(
-        "[agent] AI_PROVIDER=puter-first but no PUTER_AUTH_TOKEN — using Gemini only",
-      );
-      return callGeminiStreamWithRotation(contents, handlers, thinkingLevel);
-    }
-    try {
-      return await callPuterStreamWithRotation(contents, handlers);
-    } catch (puterErr) {
-      console.warn(
-        "[agent] Puter failed — falling back to Gemini",
-        puterErr instanceof Error ? puterErr.message.slice(0, 120) : puterErr,
-      );
-      try {
-        return await callGeminiStreamWithRotation(
-          contents,
-          handlers,
-          thinkingLevel,
-        );
-      } catch (geminiErr) {
-        const p =
-          puterErr instanceof Error ? puterErr.message : String(puterErr);
-        const g =
-          geminiErr instanceof Error ? geminiErr.message : String(geminiErr);
-        throw new Error(`${p} | Gemini fallback also failed: ${g}`);
-      }
-    }
-  }
-
-  // auto: Gemini pool, then Puter fallback
-  try {
-    return await callGeminiStreamWithRotation(
-      contents,
-      handlers,
-      thinkingLevel,
-    );
-  } catch (geminiErr) {
-    if (!puterOk) throw geminiErr;
-    console.warn(
-      "[agent] gemini pool exhausted — falling back to Puter",
-      geminiErr instanceof Error ? geminiErr.message.slice(0, 120) : geminiErr,
-    );
-    try {
-      return await callPuterStreamWithRotation(contents, handlers);
-    } catch (puterErr) {
-      const g =
-        geminiErr instanceof Error ? geminiErr.message : String(geminiErr);
-      const p =
-        puterErr instanceof Error ? puterErr.message : String(puterErr);
-      throw new Error(`${g} | Puter fallback also failed: ${p}`);
-    }
-  }
-}
-
 function seedStateFromTurns(turns: ChatTurn[], state: AgentState) {
-  for (let i = turns.length - 1; i >= 0; i--) {
-    if (turns[i].role === "user" && turns[i].content?.trim()) {
-      if (wantsFullStore(turns[i].content)) {
-        state.requireFullStore = true;
-      }
-      break;
-    }
-  }
-
   for (let i = turns.length - 1; i >= 0; i--) {
     const m = turns[i];
     if (m.role === "user") {
@@ -331,6 +226,9 @@ function seedProjectFiles(state: AgentState, files?: ProjectFile[] | null) {
     });
   }
   console.info(`[agent] seeded ${state.files.size} project file(s) for edit_file`);
+  if (state.files.has(".env.local") || state.files.has(".env.example")) {
+    state.envRequested = true;
+  }
 }
 
 function seedPackages(
@@ -352,6 +250,7 @@ function seedPackages(
 const PARALLEL_SAFE_TOOLS = new Set([
   "write_file",
   "write_image",
+  "generate_image",
   "install_package",
   "delete_file",
 ]);
@@ -547,7 +446,63 @@ export async function streamAgentEvents(
       };
 
       try {
-        const baseContents = (await toGeminiContents(turns)) as GeminiContent[];
+        const turnStartedAt = Date.now();
+        const useAgentTools = shouldUseAgentTools(turns, existingFiles);
+
+        const hasReasoningContent = () => {
+          const row = state.timeline.find((p) => p.type === "thinking");
+          const rowText =
+            row?.type === "thinking" ? row.text?.trim() ?? "" : "";
+          if (rowText) return true;
+          return state.thinking.some((t) => t.trim().length > 0);
+        };
+
+        const ensureThinkingOnTimeline = () => {
+          if (!hasReasoningContent()) {
+            const idx = state.timeline.findIndex((p) => p.type === "thinking");
+            if (idx >= 0) state.timeline.splice(idx, 1);
+            return;
+          }
+          const durationSec = Math.max(
+            1,
+            Math.round((Date.now() - turnStartedAt) / 1000),
+          );
+          const idx = state.timeline.findIndex((p) => p.type === "thinking");
+          if (idx >= 0) {
+            const prev = state.timeline[idx];
+            const prevSec =
+              prev.type === "thinking" && prev.durationSec != null
+                ? prev.durationSec
+                : 0;
+            if (prevSec <= 0) {
+              const prevText =
+                prev.type === "thinking" ? prev.text : "";
+              state.timeline[idx] = {
+                type: "thinking",
+                text: prevText,
+                durationSec,
+              };
+              emit({ type: "thinking_done", durationSec });
+            }
+            return;
+          }
+          const fromState = state.thinking.join("\n\n").trim();
+          state.timeline.unshift({
+            type: "thinking",
+            text: fromState,
+            durationSec,
+          });
+          emit({ type: "thinking_done", durationSec });
+        };
+
+        // Immediate UI shell while Mongo→Gemini connect (builds only)
+        if (useAgentTools) {
+          emit({ type: "thinking", text: "" });
+        }
+
+        const baseContents = sanitizeGeminiContents(
+          (await toGeminiContents(turns)) as GeminiContent[],
+        );
         const contents: GeminiContent[] = [...baseContents];
 
         // Only surface a project chip when files already exist (edit turn).
@@ -580,15 +535,32 @@ export async function streamAgentEvents(
               1,
               Math.min(60, elapsed || Math.round(words / 40) || 1),
             );
-            // Keep reasoning server-side only — client gets duration, never text
-            if (streamedThought.trim()) {
-              state.thinking.push(streamedThought.trim());
+            const thoughtBody = streamedThought.trim();
+            if (thoughtBody) {
+              state.thinking.push(thoughtBody);
             }
-            state.timeline.push({
-              type: "thinking",
-              text: "",
-              durationSec,
-            });
+            const thinkIdx = state.timeline.findIndex(
+              (p) => p.type === "thinking",
+            );
+            const appendText = (prev: string, chunk: string) =>
+              prev && chunk ? `${prev}\n\n${chunk}` : prev + chunk;
+            if (thinkIdx >= 0) {
+              const prev = state.timeline[thinkIdx];
+              const prevSec =
+                prev.type === "thinking" ? prev.durationSec ?? 0 : 0;
+              const prevText = prev.type === "thinking" ? prev.text : "";
+              state.timeline[thinkIdx] = {
+                type: "thinking",
+                text: appendText(prevText, thoughtBody),
+                durationSec: Math.max(1, prevSec + durationSec),
+              };
+            } else {
+              state.timeline.push({
+                type: "thinking",
+                text: thoughtBody,
+                durationSec,
+              });
+            }
             emit({ type: "thinking_done", durationSec });
             streamedThought = "";
           };
@@ -629,56 +601,43 @@ export async function streamAgentEvents(
                     thoughtDeltaOpen = true;
                     thoughtSealed = false;
                     thoughtStartedAt = Date.now();
-                    // Empty shell → "Thinking..." shimmer; no reasoning tokens
                     emit({ type: "thinking", text: "" });
+                  }
+                  for (const piece of chunkForStream(delta, 48)) {
+                    emit({ type: "thinking_delta", text: piece });
                   }
                 },
                 onFunctionCallStart: (name, args) => {
                   sealThought();
-                  // Progress announced in runToolCalls (phase / file / command)
+                  if (name === "think") {
+                    void emitThinkToolPlan(
+                      emit,
+                      String(args.text || ""),
+                    );
+                  }
                   const key = `${name}:${String(args.path || args.id || args.name || "")}`;
                   announcedToolSteps.add(key);
                 },
               },
               thinkingLevel,
+              useAgentTools,
             );
 
-          // If the turn was thought-only / tools with no text, seal now
-          if (!thoughtSealed && (thoughtDeltaOpen || streamedThought.trim())) {
+          if (!thoughtSealed) {
             if (!streamedThought.trim() && thought.trim()) {
               streamedThought = thought.trim();
+              emit({ type: "thinking", text: "" });
+              for (const piece of chunkForStream(streamedThought, 48)) {
+                emit({ type: "thinking_delta", text: piece });
+              }
+              thoughtDeltaOpen = true;
             }
-            sealThought();
+            if (thoughtDeltaOpen || streamedThought.trim()) {
+              sealThought();
+            }
           }
 
           if (!functionCalls.length) {
-            // Ecommerce: model stopped mid-suite — keep writing (no lecture in chat)
-            if (state.requireFullStore && state.files.size > 0) {
-              const suite = storeSuiteStatus(state.files);
-              if (!suite.ok) {
-                // Do not surface premature "store is ready" copy while files are still missing
-                emit({
-                  type: "phase",
-                  id: `continue-${state.phaseSeq}`,
-                  text: suite.nextLabel || "Finishing remaining routes",
-                });
-                contents.push({ role: "model", parts: parts as GeminiPart[] });
-                contents.push({
-                  role: "user",
-                  parts: [
-                    {
-                      text: [
-                        "Continue building. Call phase once, then write_file for ALL of these missing routes in ONE response (full files, parallel):",
-                        ...suite.writeNext.map((p) => `- ${p}`),
-                        "Do not call finish until those paths exist. Do not quote this list to the user.",
-                      ].join("\n"),
-                    },
-                  ],
-                });
-                continue;
-              }
-            }
-
             const finalText = (streamedText || text).trim();
             if (finalText) {
               if (!state.texts.includes(finalText)) {
@@ -695,6 +654,8 @@ export async function streamAgentEvents(
               }
             }
 
+            // Persist think line even when the model returns no thought tokens (e.g. "Hi")
+            ensureThinkingOnTimeline();
             state.finished = true;
             break;
           }
@@ -714,36 +675,6 @@ export async function streamAgentEvents(
           );
 
           contents.push({ role: "user", parts: responseParts });
-
-          // Nudge when the model drips one tool per step (each step = 1 API round-trip)
-          const writeCount = functionCalls.filter(
-            (c) => c.name === "write_file" || c.name === "write_image",
-          ).length;
-          const installCount = functionCalls.filter(
-            (c) => c.name === "install_package",
-          ).length;
-          const parallelCount = writeCount + installCount;
-          if (
-            !state.finished &&
-            parallelCount > 0 &&
-            parallelCount < 4 &&
-            (state.requireFullStore || state.files.size < 12)
-          ) {
-            contents.push({
-              role: "user",
-              parts: [
-                {
-                  text: [
-                    "SYSTEM SPEED: Call phase once with a short sentence, then 6–12 tools in parallel in ONE step:",
-                    "- all remaining install_package together",
-                    "- 4–10 write_file for core pages/components/lib",
-                    "- write_image when needed",
-                    "No per-file narration. No message_user mid-build.",
-                  ].join(" "),
-                },
-              ],
-            });
-          }
 
           // edit_file miss loop — force write_file instead of burning keys
           if (state.editFailStreak >= 2 && state.editFailPath) {
@@ -771,6 +702,7 @@ export async function streamAgentEvents(
         }
 
         if (!state.finished) state.finished = true;
+        ensureThinkingOnTimeline();
         emit(buildDoneEvent(state));
 
         if (!closed) {

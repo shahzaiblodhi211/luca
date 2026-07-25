@@ -60,8 +60,44 @@ export type BuildPhasePart = {
   commands: BuildCommandItem[];
 };
 
+/** One environment variable Luca asks the user to fill (backend / DB / auth). */
+export type EnvVarSpec = {
+  key: string;
+  label: string;
+  description?: string;
+  /** Plain instructions: how to obtain this value (Atlas URL, Stripe dashboard, etc.). */
+  howToGet?: string;
+  placeholder?: string;
+  required?: boolean;
+  /** Mask input in the modal (default true for secrets). */
+  secret?: boolean;
+};
+
+export type EnvRequestPart = {
+  type: "env_request";
+  id: string;
+  title: string;
+  description?: string;
+  database?: string;
+  vars: EnvVarSpec[];
+  /** User submitted values (keys only tracked as filled for UI). */
+  status: "pending" | "saved";
+  savedKeys?: string[];
+};
+
+export type GeneratedImagePart = {
+  type: "generated_image";
+  id: string;
+  url: string;
+  /** Optional data URL for instant render while streaming. */
+  dataUrl?: string;
+  query: string;
+  kind?: "photo" | "logo" | "illustration";
+  caption?: string;
+};
+
 export type AssistantPart =
-  /** Duration-only collapsed line — never store raw model reasoning text. */
+  /** Collapsed reasoning panel (Gemini thoughts + internal think tool). */
   | { type: "thinking"; text: string; durationSec?: number }
   | { type: "text"; text: string }
   | BuildPhasePart
@@ -74,6 +110,8 @@ export type AssistantPart =
     }
   | { type: "error"; message: string }
   | { type: "preview"; ready: boolean }
+  | EnvRequestPart
+  | GeneratedImagePart
   /** @deprecated Prefer phase + file/command items */
   | {
       type: "step";
@@ -111,7 +149,7 @@ export type ChatImageRef = {
   path: string;
   query: string;
   mimeType: string;
-  /** Live HTTPS URL (Pexels etc.) — prefer this over generating/storing bytes. */
+  /** Served path e.g. `/api/images/{id}` (bytes live in Mongo). */
   url?: string;
 };
 
@@ -127,6 +165,8 @@ export type StoredImage = {
 
 export type ChatDoc = {
   _id: string;
+  /** Owner from Luca auth (`users._id`). Required for new chats. */
+  userId: string;
   title: string;
   messages: ChatMessage[];
   projectId: string | null;
@@ -135,6 +175,8 @@ export type ChatDoc = {
   packages?: Record<string, string>;
   images: ChatImageRef[];
   attachments: ChatAttachment[];
+  /** Luca builder tier for this chat (spark | turbo | ultra). */
+  lucaModelTier?: string;
   /** Gemini thinking level for this chat (MINIMAL | LOW | MEDIUM | HIGH). */
   thinkingLevel?: string;
   createdAt: Date;

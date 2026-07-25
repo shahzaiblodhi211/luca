@@ -1,0 +1,5 @@
+# Vercel build — optional; install already skips Playwright via SKIP_PLAYWRIGHT=1 in project settings
+.preview-runtime
+.preview-workspaces
+services/preview-worker
+deploy

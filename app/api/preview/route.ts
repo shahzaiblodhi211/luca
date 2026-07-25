@@ -1,91 +1,116 @@
 import { NextResponse } from "next/server";
 import {
-  listPreviewRoutes,
-  pickDefaultPreviewRoute,
-} from "@/lib/preview/routes";
-import { withLock } from "@/lib/preview/mutex";
-import {
-  ensurePreviewServer,
-  getPreviewServer,
-  stopPreviewServer,
-} from "@/lib/preview/server-manager";
-import { syncPreviewWorkspace } from "@/lib/preview/workspace";
-import type { ProjectFile } from "@/lib/types";
+  runPreviewDelete,
+  runPreviewGet,
+  runPreviewPost,
+} from "@/lib/preview/run-preview-request";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-type Body = {
-  chatId?: string;
-  files?: ProjectFile[];
-  imageDataUrls?: Record<string, string>;
-  packages?: Record<string, string>;
-  restart?: boolean;
-};
+function workerBase(): string | null {
+  const raw = process.env.PREVIEW_WORKER_URL?.trim();
+  return raw ? raw.replace(/\/+$/, "") : null;
+}
+
+/** Vercel cannot spawn local preview servers — require worker URL in production. */
+function previewBlockedOnHost(): NextResponse | null {
+  if (workerBase()) return null;
+  if (process.env.VERCEL !== "1") return null;
+  return NextResponse.json(
+    {
+      error:
+        "Live preview is not configured yet. Add PREVIEW_WORKER_URL (preview.lucaai.app) on Vercel, or use chat/build until preview is wired.",
+      status: "unconfigured",
+    },
+    { status: 503 },
+  );
+}
+
+async function forwardToWorker(
+  path: string,
+  init?: RequestInit,
+): Promise<Response> {
+  const base = workerBase();
+  if (!base) throw new Error("PREVIEW_WORKER_URL not set");
+  return fetch(`${base}${path}`, init);
+}
 
 export async function GET(req: Request) {
-  const chatId = new URL(req.url).searchParams.get("chatId");
-  if (!chatId) {
-    return NextResponse.json({ error: "chatId required" }, { status: 400 });
+  const blocked = previewBlockedOnHost();
+  if (blocked) return blocked;
+
+  const url = new URL(req.url);
+  const chatId = url.searchParams.get("chatId");
+  const base = workerBase();
+  if (base) {
+    const res = await forwardToWorker(
+      `/api/preview?chatId=${encodeURIComponent(chatId ?? "")}`,
+    );
+    return new NextResponse(await res.text(), {
+      status: res.status,
+      headers: { "Content-Type": "application/json" },
+    });
   }
-  const info = getPreviewServer(chatId);
-  if (!info) {
-    return NextResponse.json({ status: "idle" });
-  }
-  return NextResponse.json(info);
+  const out = runPreviewGet(chatId);
+  return NextResponse.json(out.json, { status: out.status });
 }
 
 export async function DELETE(req: Request) {
+  const blocked = previewBlockedOnHost();
+  if (blocked) return blocked;
+
   const chatId = new URL(req.url).searchParams.get("chatId");
-  if (!chatId) {
-    return NextResponse.json({ error: "chatId required" }, { status: 400 });
+  const base = workerBase();
+  if (base) {
+    const res = await forwardToWorker(
+      `/api/preview?chatId=${encodeURIComponent(chatId ?? "")}`,
+      { method: "DELETE" },
+    );
+    return new NextResponse(await res.text(), {
+      status: res.status,
+      headers: { "Content-Type": "application/json" },
+    });
   }
-  await stopPreviewServer(chatId);
-  return NextResponse.json({ ok: true });
+  const out = await runPreviewDelete(chatId);
+  return NextResponse.json(out.json, { status: out.status });
 }
 
 export async function POST(req: Request) {
-  let body: Body;
+  const blocked = previewBlockedOnHost();
+  if (blocked) return blocked;
+
+  const base = workerBase();
+  const bodyText = await req.text();
+  if (base) {
+    const res = await forwardToWorker("/api/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: bodyText,
+    });
+    return new NextResponse(await res.text(), {
+      status: res.status,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  let body: unknown;
   try {
-    body = (await req.json()) as Body;
+    body = JSON.parse(bodyText || "{}");
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
-
-  const chatId = body.chatId?.trim();
-  const files = body.files ?? [];
-  if (!chatId) {
-    return NextResponse.json({ error: "chatId required" }, { status: 400 });
-  }
-  if (!files.length) {
-    return NextResponse.json({ error: "files required" }, { status: 400 });
-  }
-
   try {
-    const result = await withLock(`preview:${chatId}`, async () => {
-      const sync = await syncPreviewWorkspace(
-        chatId,
-        files,
-        body.imageDataUrls ?? {},
-        body.packages ?? {},
-      );
-      const server = await ensurePreviewServer(chatId, {
-        restart: Boolean(body.restart) || sync.depsChanged,
-      });
-      const routes = listPreviewRoutes(files);
-      return {
-        ...server,
-        routes,
-        defaultRoute: pickDefaultPreviewRoute(files, routes),
-        depsChanged: sync.depsChanged,
-      };
-    });
-
-    return NextResponse.json(result);
+    const out = await runPreviewPost(
+      body as Parameters<typeof runPreviewPost>[0],
+    );
+    return NextResponse.json(out.json, { status: out.status });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Preview failed";
     console.error("[preview]", message);
-    return NextResponse.json({ error: message, status: "error" }, { status: 500 });
+    return NextResponse.json(
+      { error: message, status: "error" },
+      { status: 500 },
+    );
   }
 }

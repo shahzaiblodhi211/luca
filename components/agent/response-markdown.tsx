@@ -1,17 +1,10 @@
 "use client";
 
-import { Streamdown } from "streamdown";
-import { cjk } from "@streamdown/cjk";
-import { code } from "@streamdown/code";
-import { math } from "@streamdown/math";
-import { mermaid } from "@streamdown/mermaid";
+import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 
-const plugins = { cjk, code, math, mermaid };
-
 /**
- * Clean markdown renderer for assistant text.
- * Uses Streamdown (AI Elements MessageResponse engine) without caret / fake animation.
+ * Assistant markdown via AI Elements MessageResponse (Streamdown).
  */
 export function ResponseMarkdown({
   children,
@@ -30,7 +23,7 @@ export function ResponseMarkdown({
   }
 
   return (
-    <Streamdown
+    <MessageResponse
       className={cn(
         "size-full text-[15px] leading-relaxed text-foreground",
         "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
@@ -45,7 +38,6 @@ export function ResponseMarkdown({
         "[&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground",
         className,
       )}
-      plugins={plugins}
       parseIncompleteMarkdown={isStreaming}
       mode={isStreaming ? "streaming" : "static"}
       isAnimating={false}
@@ -53,6 +45,6 @@ export function ResponseMarkdown({
       controls={false}
     >
       {text}
-    </Streamdown>
+    </MessageResponse>
   );
 }

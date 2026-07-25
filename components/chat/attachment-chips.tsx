@@ -1,10 +1,30 @@
 "use client";
 
-import { FileText } from "lucide-react";
+import {
+  Attachment,
+  AttachmentPreview,
+  Attachments,
+  type AttachmentData,
+} from "@/components/ai-elements/attachments";
 import type { ChatAttachment } from "@/lib/types";
 
 function isCloneScreenshot(file: ChatAttachment) {
   return file.kind === "image" && /^clone-screenshot/i.test(file.name);
+}
+
+function toAttachmentData(file: ChatAttachment): AttachmentData {
+  return {
+    id: file.id,
+    type: "file",
+    url: file.url,
+    mediaType:
+      file.mimeType && file.mimeType !== "application/octet-stream"
+        ? file.mimeType
+        : file.kind === "image"
+          ? "image/jpeg"
+          : file.mimeType || "application/octet-stream",
+    filename: file.name,
+  };
 }
 
 export function AttachmentChips({
@@ -44,37 +64,20 @@ export function AttachmentChips({
             />
           </div>
           <p className="px-3 py-2 text-[12px] leading-snug text-sky-100/80">
-            Scroll this image — Luca AI must clone the entire page (not only the hero).
+            Scroll this image — Luca AI must clone the entire page (not only the
+            hero).
           </p>
         </a>
       ))}
 
       {other.length > 0 ? (
-        <div className="flex flex-wrap gap-2">
+        <Attachments variant="grid">
           {other.map((file) => (
-            <a
-              key={file.id}
-              href={file.url}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900/80 px-2 py-1.5 text-xs text-zinc-200 transition hover:border-zinc-500"
-            >
-              {file.kind === "image" ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={file.url}
-                  alt={file.name}
-                  className="h-10 w-10 rounded object-cover"
-                />
-              ) : (
-                <div className="flex h-10 w-10 items-center justify-center rounded bg-zinc-800 text-zinc-400">
-                  <FileText className="h-4 w-4" />
-                </div>
-              )}
-              <span className="max-w-[160px] truncate">{file.name}</span>
-            </a>
+            <Attachment key={file.id} data={toAttachmentData(file)}>
+              <AttachmentPreview />
+            </Attachment>
           ))}
-        </div>
+        </Attachments>
       ) : null}
     </div>
   );
