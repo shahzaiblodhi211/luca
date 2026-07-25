@@ -283,15 +283,6 @@ const nextConfig: NextConfig = {
   images: {
     unoptimized: true,
   },
-  webpack: (config, { dev, isServer }) => {
-    if (dev && !isServer && process.env.LUCA_PREVIEW_NO_HMR === "1") {
-      config.plugins = config.plugins.filter(
-        (plugin: { constructor?: { name?: string } }) =>
-          plugin?.constructor?.name !== "ReactRefreshWebpackPlugin",
-      );
-    }
-    return config;
-  },
 };
 
 export default nextConfig;

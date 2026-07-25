@@ -14,6 +14,7 @@ import {
   sanitizeChatId,
   workspaceDirFor,
 } from "./paths";
+import { patchWorkspacePreviewBasePath } from "./layout-preview-base";
 import {
   previewBasePathForPort,
   previewInternalOrigin,
@@ -223,7 +224,7 @@ async function startProcess(
   const cwd = workspaceDirFor(chatId);
   const bin = nextBinPath();
   const previewBasePath = previewBasePathForPort(port);
-  const behindPublicProxy = Boolean(previewBasePath);
+  await patchWorkspacePreviewBasePath(chatId, previewBasePath);
 
   const previewEnv: NodeJS.ProcessEnv = {
     ...process.env,
@@ -231,12 +232,6 @@ async function startProcess(
     NEXT_TELEMETRY_DISABLED: "1",
     ...(previewBasePath
       ? { LUCA_PREVIEW_BASE_PATH: previewBasePath }
-      : {}),
-    ...(behindPublicProxy
-      ? {
-          LUCA_PREVIEW_NO_HMR: "1",
-          __NEXT_DISABLE_FAST_REFRESH: "true",
-        }
       : {}),
   };
 

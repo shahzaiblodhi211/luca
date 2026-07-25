@@ -2,7 +2,6 @@
 
 import dynamic from "next/dynamic";
 import { loader } from "@monaco-editor/react";
-import * as monaco from "monaco-editor";
 import {
   ChevronDown,
   ChevronRight,
@@ -15,20 +14,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectFile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+const MONACO_CDN = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs";
+
 if (typeof window !== "undefined") {
-  loader.config({ monaco });
+  loader.config({ paths: { vs: MONACO_CDN } });
 }
 
 const MonacoEditor = dynamic(
   () => import("@monaco-editor/react").then((m) => m.default),
   {
     ssr: false,
-    loading: () => (
-      <div className="flex h-full min-h-[240px] items-center justify-center gap-2 text-sm text-zinc-500">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        Loading editor…
-      </div>
-    ),
+    loading: () => null,
   },
 );
 
@@ -193,6 +189,104 @@ function FileTreeNode({
   );
 }
 
+function SourceEditor({
+  activeFile,
+  files,
+  onFilesChange,
+}: {
+  activeFile: ProjectFile;
+  files: ProjectFile[];
+  onFilesChange?: (files: ProjectFile[]) => void;
+}) {
+  const path = activeFile.path.replace(/^\/+/, "");
+  const [useMonaco, setUseMonaco] = useState(true);
+  const [monacoReady, setMonacoReady] = useState(false);
+  const mountTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const monacoReadyRef = useRef(false);
+
+  useEffect(() => {
+    monacoReadyRef.current = monacoReady;
+  }, [monacoReady]);
+
+  useEffect(() => {
+    setMonacoReady(false);
+    setUseMonaco(true);
+    if (mountTimer.current) clearTimeout(mountTimer.current);
+    mountTimer.current = setTimeout(() => {
+      if (!monacoReadyRef.current) setUseMonaco(false);
+    }, 8000);
+    return () => {
+      if (mountTimer.current) clearTimeout(mountTimer.current);
+    };
+  }, [path]);
+
+  const onCodeChange = useCallback(
+    (value: string) => {
+      if (!onFilesChange) return;
+      onFilesChange(
+        files.map((f) =>
+          f.path.replace(/^\/+/, "") === path ? { ...f, code: value } : f,
+        ),
+      );
+    },
+    [files, onFilesChange, path],
+  );
+
+  if (!useMonaco) {
+    return (
+      <textarea
+        className="absolute inset-0 h-full w-full resize-none bg-[#1e1e1e] p-4 font-mono text-[13px] leading-relaxed text-zinc-100 outline-none"
+        value={activeFile.code}
+        readOnly={!onFilesChange}
+        onChange={(e) => onCodeChange(e.target.value)}
+        spellCheck={false}
+      />
+    );
+  }
+
+  return (
+    <div className="absolute inset-0">
+      {!monacoReady ? (
+        <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-[#1e1e1e] text-sm text-zinc-500">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading editor…
+        </div>
+      ) : null}
+      <MonacoEditor
+        key={path}
+        height="100%"
+        width="100%"
+        theme="vs-dark"
+        path={path}
+        language={languageFromPath(activeFile.path)}
+        value={activeFile.code ?? ""}
+        onChange={(value) => {
+          if (value != null) onCodeChange(value);
+        }}
+        onMount={() => {
+          setMonacoReady(true);
+          if (mountTimer.current) clearTimeout(mountTimer.current);
+        }}
+        loading={null}
+        options={{
+          fontSize: 13,
+          fontFamily:
+            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+          minimap: { enabled: false },
+          scrollBeyondLastLine: false,
+          wordWrap: "on",
+          tabSize: 2,
+          automaticLayout: true,
+          padding: { top: 12, bottom: 12 },
+          renderLineHighlight: "line",
+          smoothScrolling: true,
+          readOnly: !onFilesChange,
+        }}
+      />
+    </div>
+  );
+}
+
 export function ProjectCodeEditor({
   files,
   onFilesChange,
@@ -202,29 +296,6 @@ export function ProjectCodeEditor({
   packages?: Record<string, string>;
   onFilesChange?: (files: ProjectFile[]) => void;
 }) {
-  const editorWrapRef = useRef<HTMLDivElement>(null);
-  const [editorHeight, setEditorHeight] = useState(520);
-  const [monacoFailed, setMonacoFailed] = useState(false);
-
-  useEffect(() => {
-    void loader
-      .init()
-      .then(() => setMonacoFailed(false))
-      .catch(() => setMonacoFailed(true));
-  }, []);
-
-  useEffect(() => {
-    const el = editorWrapRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => {
-      const h = el.clientHeight;
-      if (h >= 200) setEditorHeight(h);
-    });
-    ro.observe(el);
-    if (el.clientHeight >= 200) setEditorHeight(el.clientHeight);
-    return () => ro.disconnect();
-  }, []);
-
   const sorted = useMemo(
     () =>
       [...files].sort((a, b) =>
@@ -287,8 +358,8 @@ export function ProjectCodeEditor({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-zinc-950">
-      <div className="flex items-center gap-2 border-b border-zinc-800 px-3 py-1.5">
-        <span className="truncate text-xs text-zinc-400">
+      <div className="flex shrink-0 items-center gap-2 border-b border-zinc-800 px-3 py-1.5">
+        <span className="truncate font-mono text-xs text-zinc-400">
           {activePath || "Select a file"}
         </span>
       </div>
@@ -311,72 +382,13 @@ export function ProjectCodeEditor({
           ))}
         </aside>
 
-        <div
-          ref={editorWrapRef}
-          className="relative min-h-[360px] min-w-0 flex-1 self-stretch"
-        >
+        <div className="relative min-h-0 min-w-0 flex-1 bg-[#1e1e1e]">
           {activeFile ? (
-            monacoFailed ? (
-              <textarea
-                className="h-full w-full resize-none bg-zinc-950 p-4 font-mono text-[13px] leading-relaxed text-zinc-200 outline-none"
-                style={{ minHeight: editorHeight }}
-                value={activeFile.code}
-                readOnly={!onFilesChange}
-                onChange={(e) => {
-                  if (!onFilesChange) return;
-                  const path = activeFile.path.replace(/^\/+/, "");
-                  onFilesChange(
-                    files.map((f) =>
-                      f.path.replace(/^\/+/, "") === path
-                        ? { ...f, code: e.target.value }
-                        : f,
-                    ),
-                  );
-                }}
-                spellCheck={false}
-              />
-            ) : (
-              <MonacoEditor
-                key={activePath}
-                height={editorHeight}
-                theme="vs-dark"
-                path={activeFile.path}
-                language={languageFromPath(activeFile.path)}
-                value={activeFile.code}
-                onChange={(value) => {
-                  if (value == null || !onFilesChange) return;
-                  const path = activeFile.path.replace(/^\/+/, "");
-                  onFilesChange(
-                    files.map((f) =>
-                      f.path.replace(/^\/+/, "") === path
-                        ? { ...f, code: value }
-                        : f,
-                    ),
-                  );
-                }}
-                onValidate={() => {}}
-                loading={
-                  <div className="flex h-full min-h-[240px] items-center justify-center gap-2 text-sm text-zinc-500">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Loading editor…
-                  </div>
-                }
-                options={{
-                  fontSize: 13,
-                  fontFamily:
-                    "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-                  minimap: { enabled: false },
-                  scrollBeyondLastLine: false,
-                  wordWrap: "on",
-                  tabSize: 2,
-                  automaticLayout: true,
-                  padding: { top: 12, bottom: 12 },
-                  renderLineHighlight: "line",
-                  smoothScrolling: true,
-                  readOnly: !onFilesChange,
-                }}
-              />
-            )
+            <SourceEditor
+              activeFile={activeFile}
+              files={files}
+              onFilesChange={onFilesChange}
+            />
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-zinc-500">
               Select a file

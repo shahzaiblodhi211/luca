@@ -77,6 +77,16 @@ export async function DELETE(req: Request) {
   return NextResponse.json(out.json, { status: out.status });
 }
 
+function lucaAppOriginForPreview(): string {
+  const raw =
+    process.env.NEXT_PUBLIC_APP_URL?.trim() ||
+    process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim() ||
+    process.env.VERCEL_URL?.trim();
+  if (!raw) return "";
+  if (raw.startsWith("http")) return raw.replace(/\/+$/, "");
+  return `https://${raw.replace(/\/+$/, "")}`;
+}
+
 export async function POST(req: Request) {
   const blocked = previewBlockedOnHost();
   if (blocked) return blocked;
@@ -84,10 +94,21 @@ export async function POST(req: Request) {
   const base = workerBase();
   const bodyText = await req.text();
   if (base) {
+    let forwardBody = bodyText;
+    try {
+      const parsed = JSON.parse(bodyText || "{}") as Record<string, unknown>;
+      if (!parsed.lucaAppOrigin) {
+        const origin = lucaAppOriginForPreview();
+        if (origin) parsed.lucaAppOrigin = origin;
+      }
+      forwardBody = JSON.stringify(parsed);
+    } catch {
+      /* forward raw */
+    }
     const res = await forwardToWorker("/api/preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: bodyText,
+      body: forwardBody,
     });
     return new NextResponse(await res.text(), {
       status: res.status,

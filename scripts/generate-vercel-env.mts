@@ -101,8 +101,8 @@ if (local.RESEND_API_KEY?.trim()) {
 
 lines.push(
   "",
-  "# Phase 2 — uncomment after preview worker on DigitalOcean",
-  "# PREVIEW_WORKER_URL=https://preview.lucaai.app",
+  "PREVIEW_WORKER_URL=https://preview.lucaai.app",
+  "NEXT_PUBLIC_PREVIEW_ORIGIN=https://preview.lucaai.app",
   "",
   "# Optional billing (when Stripe is wired)",
   "# STRIPE_SECRET_KEY=",

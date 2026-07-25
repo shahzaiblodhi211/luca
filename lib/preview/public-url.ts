@@ -34,6 +34,17 @@ export function previewReadyCheckUrl(port: number): string {
 
 export function withPublicPreviewUrl<T extends { port: number; url: string }>(
   info: T,
-): T {
-  return { ...info, url: previewPublicOrigin(info.port) };
+): T & {
+  previewOrigin: string | null;
+  previewBasePath: string | null;
+} {
+  const previewBasePath = previewBasePathForPort(info.port);
+  const previewOrigin =
+    process.env.PREVIEW_PUBLIC_ORIGIN?.trim().replace(/\/+$/, "") ?? null;
+  return {
+    ...info,
+    url: previewPublicOrigin(info.port),
+    previewOrigin,
+    previewBasePath,
+  };
 }

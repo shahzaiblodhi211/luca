@@ -29,6 +29,12 @@ import {
 } from "@/components/preview/visual-edit-panel";
 import { ProjectCodeEditor } from "@/components/preview/project-code-editor";
 import { previewApiUrl } from "@/lib/preview/client-api-url";
+import {
+  formatPreviewDisplayUrl,
+  previewUrlForRoute,
+  resolvePreviewIframeBase,
+  type PreviewUrlPayload,
+} from "@/lib/preview/browser-preview-url";
 import { useShell } from "@/components/chat/shell-context";
 
 type PreviewStatus = "idle" | "syncing" | "ready" | "error";
@@ -85,7 +91,7 @@ export function CodePreview({
   const { toggleSidebar } = useShell();
   const [status, setStatus] = useState<PreviewStatus>("idle");
   const [error, setError] = useState<string | null>(null);
-  const [baseUrl, setBaseUrl] = useState<string | null>(null);
+  const [previewMeta, setPreviewMeta] = useState<PreviewUrlPayload>({});
   const [routes, setRoutes] = useState<PreviewRoute[]>([]);
   const [activePath, setActivePath] = useState("/");
   const [iframeKey, setIframeKey] = useState(0);
@@ -110,9 +116,16 @@ export function CodePreview({
     [routes],
   );
 
-  const previewSrc = baseUrl
-    ? `${baseUrl.replace(/\/+$/, "")}${activePath === "/" ? "/" : activePath}`
-    : null;
+  const baseUrl = useMemo(
+    () => resolvePreviewIframeBase(previewMeta),
+    [previewMeta],
+  );
+
+  useEffect(() => {
+    baseUrlRef.current = baseUrl;
+  }, [baseUrl]);
+
+  const previewSrc = baseUrl ? previewUrlForRoute(baseUrl, activePath) : null;
 
   const softReloadIframe = useCallback(() => {
     const frame = iframeRef.current;
@@ -139,7 +152,7 @@ export function CodePreview({
 
   const displayPath = activePath === "/" ? "/" : activePath;
   const displayUrl = baseUrl
-    ? `${baseUrl.replace(/^https?:\/\//, "")}${displayPath === "/" ? "" : displayPath}`
+    ? formatPreviewDisplayUrl(baseUrl, displayPath)
     : "Starting preview…";
 
   const goRoute = useCallback(
@@ -259,8 +272,9 @@ export function CodePreview({
             restart: opts?.restart,
           }),
         });
-        const data = (await res.json()) as {
+        const data = (await res.json()) as PreviewUrlPayload & {
           url?: string;
+          port?: number;
           routes?: PreviewRoute[];
           defaultRoute?: string;
           error?: string;
@@ -271,12 +285,16 @@ export function CodePreview({
         if (!res.ok) {
           throw new Error(data.error || "Failed to start preview");
         }
-        const nextUrl = data.url ?? null;
-        const urlChanged = nextUrl !== baseUrlRef.current;
-        setBaseUrl(nextUrl);
-        baseUrlRef.current = nextUrl;
+        const nextResolved = resolvePreviewIframeBase(data);
+        const urlChanged = nextResolved !== baseUrlRef.current;
+        setPreviewMeta({
+          url: data.url,
+          port: data.port,
+          previewOrigin: data.previewOrigin ?? null,
+          previewBasePath: data.previewBasePath ?? null,
+        });
         setRoutes(data.routes ?? []);
-        if (nextUrl) onReadyRef.current?.();
+        if (nextResolved) onReadyRef.current?.();
         setActivePath((prev) => {
           const paths = (data.routes ?? [])
             .filter((r) => r.kind === "page")
@@ -288,6 +306,8 @@ export function CodePreview({
         lastSyncedFp.current = fp;
         if (opts?.restart || data.depsChanged || urlChanged || !hadUrl) {
           setIframeKey((k) => k + 1);
+        } else if (hadUrl) {
+          softReloadIframe();
         } else if (opts?.force) {
           softReloadIframe();
         }
@@ -466,6 +486,23 @@ export function CodePreview({
                 <ChevronRight className="h-4 w-4" />
               </button>
               <span className="mx-0.5 h-4 w-px shrink-0 bg-zinc-800" />
+              {pageRoutes.length > 1 ? (
+                <select
+                  value={activePath}
+                  title="Open route"
+                  onChange={(e) => {
+                    setActivePath(e.target.value);
+                    setIframeKey((k) => k + 1);
+                  }}
+                  className="max-w-[120px] shrink-0 truncate rounded-md border-0 bg-transparent py-0.5 pl-1 pr-0 text-[10px] text-zinc-400 outline-none ring-0 focus:text-zinc-200"
+                >
+                  {pageRoutes.map((r) => (
+                    <option key={r.path} value={r.path}>
+                      {r.label}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
               <button
                 type="button"
                 title={
@@ -592,7 +629,7 @@ export function CodePreview({
               ) : null}
               {status === "ready" && baseUrl && previewTool !== "visual" && (
                 <div className="pointer-events-none absolute bottom-2 right-2 rounded bg-zinc-950/70 px-2 py-0.5 text-[10px] text-zinc-500">
-                  Real Next.js · {baseUrl.replace("http://", "")}
+                  {formatPreviewDisplayUrl(baseUrl, activePath)}
                 </div>
               )}
             </div>

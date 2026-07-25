@@ -18,6 +18,8 @@ export type PreviewPostBody = {
   imageDataUrls?: Record<string, string>;
   packages?: Record<string, string>;
   restart?: boolean;
+  /** Main Luca app origin (Vercel) for /api/images materialization on the worker. */
+  lucaAppOrigin?: string;
 };
 
 export async function runPreviewPost(body: PreviewPostBody) {
@@ -36,6 +38,7 @@ export async function runPreviewPost(body: PreviewPostBody) {
       files,
       body.imageDataUrls ?? {},
       body.packages ?? {},
+      { lucaAppOrigin: body.lucaAppOrigin },
     );
     const server = await ensurePreviewServer(chatId, {
       restart: Boolean(body.restart) || sync.depsChanged,

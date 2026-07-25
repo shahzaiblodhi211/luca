@@ -33,14 +33,14 @@ const AUTH_DEFAULT_CANDIDATES = [
 function hasAppPage(files: ProjectFile[]): boolean {
   return files.some((f) => {
     const p = f.path.replace(/^\/+/, "");
-    return /^app\/page\.(tsx|jsx|ts|js)$/.test(p);
+    return /^(?:src\/)?app\/page\.(tsx|jsx|ts|js)$/.test(p);
   });
 }
 
 /** True when homepage is missing or only redirects into auth. */
 function homepageIsAuthRedirect(files: ProjectFile[]): boolean {
   const page = files.find((f) =>
-    /^\/?app\/page\.(tsx|jsx|ts|js)$/.test(f.path.replace(/^\/+/, "")),
+    /^\/?(?:src\/)?app\/page\.(tsx|jsx|ts|js)$/.test(f.path.replace(/^\/+/, "")),
   );
   if (!page) return true;
   const code = page.code;
@@ -75,7 +75,7 @@ export function listPreviewRoutes(files: ProjectFile[]): PreviewRoute[] {
   for (const file of files) {
     const rel = file.path.replace(/^\/+/, "");
 
-    const pageMatch = rel.match(/^app\/(.*)page\.(tsx|jsx|ts|js)$/);
+    const pageMatch = rel.match(/^(?:src\/)?app\/(.*)page\.(tsx|jsx|ts|js)$/);
     if (pageMatch) {
       const dir = pageMatch[1];
       const segments = dir
@@ -92,7 +92,7 @@ export function listPreviewRoutes(files: ProjectFile[]): PreviewRoute[] {
       continue;
     }
 
-    const apiMatch = rel.match(/^app\/(.*)route\.(ts|js)$/);
+    const apiMatch = rel.match(/^(?:src\/)?app\/(.*)route\.(ts|js)$/);
     if (apiMatch) {
       const dir = apiMatch[1];
       const segments = dir
@@ -104,6 +104,29 @@ export function listPreviewRoutes(files: ProjectFile[]): PreviewRoute[] {
         path: routePath,
         label: `API ${routePath}`,
         kind: "api",
+      });
+    }
+  }
+
+  for (const file of files) {
+    const rel = file.path.replace(/^\/+/, "");
+    const pagesMatch = rel.match(/^pages\/(.+)\.(tsx|jsx|ts|js)$/);
+    if (pagesMatch) {
+      const stem = pagesMatch[1]!;
+      if (stem === "index") {
+        pages.set("/", {
+          path: "/",
+          label: routeLabel("/"),
+          kind: "page",
+        });
+        continue;
+      }
+      if (stem.startsWith("_") || stem.includes("/api/")) continue;
+      const routePath = `/${stem.replace(/\/index$/, "")}`;
+      pages.set(routePath, {
+        path: routePath,
+        label: routeLabel(routePath),
+        kind: "page",
       });
     }
   }

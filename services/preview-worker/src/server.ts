@@ -180,6 +180,14 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    const previewImages = pathname.match(
+      /^\/_preview\/(\d+)\/api\/images\/(.+)$/,
+    );
+    if (previewImages) {
+      proxyToLucaApp(req, res, `/api/images/${previewImages[2]}${url.search}`);
+      return;
+    }
+
     const previewProxy = pathname.match(/^\/_preview\/(\d+)(\/.*)?$/);
     if (previewProxy) {
       const port = Number.parseInt(previewProxy[1]!, 10);

@@ -18,7 +18,12 @@ import {
   sanitizeChatId,
   workspaceDirFor,
 } from "./paths";
+import { applyImageDataUrlsToCode } from "./image-data-urls";
 import { ensureInspectorInLayout } from "./luca-inspector-layout";
+import {
+  ensurePreviewNextConfig,
+  isNextConfigPath,
+} from "./next-config-merge";
 import {
   resolveNextUiStubFiles,
   SCAFFOLD_GITIGNORE,
@@ -31,8 +36,9 @@ import {
   SCAFFOLD_UTILS,
 } from "./scaffold";
 
-function lucaAppOrigin(): string {
+function lucaAppOrigin(override?: string): string {
   return (
+    override?.trim() ||
     process.env.LUCA_APP_ORIGIN?.trim() ||
     process.env.NEXT_PUBLIC_APP_URL?.trim() ||
     ""
@@ -40,10 +46,15 @@ function lucaAppOrigin(): string {
 }
 
 /** Preview iframe is on another host — /api/images lives on main Luca (Vercel). */
-function rewriteLucaImageApiUrls(code: string): string {
-  const origin = lucaAppOrigin();
+function rewriteLucaImageApiUrls(code: string, originOverride?: string): string {
+  const origin = lucaAppOrigin(originOverride);
   if (!origin) return code;
-  return code.replace(/(["'`])\/api\/images\//g, `$1${origin}/api/images/`);
+  let next = code.replace(/(["'`])\/api\/images\//g, `$1${origin}/api/images/`);
+  next = next.replace(/url\(\s*\/api\/images\//g, `url(${origin}/api/images/`);
+  next = next.replace(/url\(\s*['"]\/api\/images\//g, (m) =>
+    m.replace("/api/images/", `${origin}/api/images/`),
+  );
+  return next;
 }
 
 const API_IMAGE_ID = /\/api\/images\/([a-f0-9]{24})/gi;
@@ -102,8 +113,9 @@ async function writeBinary(filePath: string, buf: Buffer) {
 async function materializeLucaApiImages(
   byPath: Map<string, string>,
   dir: string,
+  originOverride?: string,
 ): Promise<void> {
-  const origin = lucaAppOrigin();
+  const origin = lucaAppOrigin(originOverride);
   if (!origin) return;
 
   const ids = new Set<string>();
@@ -256,6 +268,47 @@ function runNpmInstall(cwd: string): Promise<void> {
   });
 }
 
+async function pruneStaleSourceFiles(
+  workspaceDir: string,
+  keepRelative: Set<string>,
+): Promise<void> {
+  const roots = ["app", "src", "pages", "components", "lib"];
+  for (const root of roots) {
+    const abs = path.join(workspaceDir, root);
+    try {
+      await fs.access(abs);
+    } catch {
+      continue;
+    }
+    await walkPrune(abs, workspaceDir, keepRelative);
+  }
+}
+
+async function walkPrune(
+  dir: string,
+  workspaceDir: string,
+  keepRelative: Set<string>,
+): Promise<void> {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  for (const ent of entries) {
+    const abs = path.join(dir, ent.name);
+    const rel = path.relative(workspaceDir, abs).replace(/\\/g, "/");
+    if (ent.isDirectory()) {
+      await walkPrune(abs, workspaceDir, keepRelative);
+      try {
+        const sub = await fs.readdir(abs);
+        if (sub.length === 0) await fs.rmdir(abs);
+      } catch {
+        /* ignore */
+      }
+      continue;
+    }
+    if (!keepRelative.has(rel)) {
+      await fs.rm(abs, { force: true });
+    }
+  }
+}
+
 /**
  * Materialize agent project files into a real Next.js workspace on disk.
  */
@@ -264,7 +317,9 @@ export async function syncPreviewWorkspace(
   files: ProjectFile[],
   imageDataUrls: Record<string, string> = {},
   packages: Record<string, string> = {},
+  opts?: { lucaAppOrigin?: string },
 ): Promise<SyncWorkspaceResult> {
+  const lucaOrigin = opts?.lucaAppOrigin;
   const id = sanitizeChatId(chatId);
   const dir = workspaceDirFor(id);
   await ensureDir(dir);
@@ -293,6 +348,13 @@ export async function syncPreviewWorkspace(
     const p = normalizePath(file.path);
     // Host-owned runtime / Tailwind v4 tooling — never let agent overwrite
     if (isHostOwnedPreviewPath(p)) continue;
+    if (isNextConfigPath(p)) {
+      byPath.set(
+        p,
+        ensurePreviewNextConfig(sanitizeGeneratedCode(file.code)),
+      );
+      continue;
+    }
     let code = file.code;
     if (/\.(tsx?|jsx?)$/i.test(p)) {
       code = sanitizeGeneratedCode(code)
@@ -310,7 +372,7 @@ export async function syncPreviewWorkspace(
       if (!isRootLayout) {
         code = ensureUseClientDirective(code);
       }
-      code = rewriteLucaImageApiUrls(code);
+      code = rewriteLucaImageApiUrls(code, lucaOrigin);
     } else if (/\.css$/i.test(p)) {
       code = normalizePreviewCss(sanitizeGeneratedCode(file.code));
     } else if (/\.(mjs|cjs)$/i.test(p)) {
@@ -322,7 +384,9 @@ export async function syncPreviewWorkspace(
   // Always re-apply host theme provider + Tailwind v4 postcss after agent files
   byPath.set("components/theme-provider.tsx", SCAFFOLD_THEME_PROVIDER);
   byPath.set("postcss.config.mjs", SCAFFOLD_POSTCSS);
-  byPath.set("next.config.ts", SCAFFOLD_NEXT_CONFIG);
+  if (![...byPath.keys()].some((k) => isNextConfigPath(k))) {
+    byPath.set("next.config.ts", SCAFFOLD_NEXT_CONFIG);
+  }
 
   // Ensure agent brand CSS still boots Tailwind v4
   const globals = byPath.get("app/globals.css");
@@ -337,14 +401,15 @@ export async function syncPreviewWorkspace(
   // Ensure layout imports globals + suppressHydrationWarning on <html>
   let layout = byPath.get("app/layout.tsx");
   if (layout) {
-    if (!layout.includes("globals.css")) {
-      layout = `import "./globals.css";\n${layout}`;
+    let nextLayout = layout;
+    if (!nextLayout.includes("globals.css")) {
+      nextLayout = `import "./globals.css";\n${nextLayout}`;
     }
-    if (!layout.includes("suppressHydrationWarning")) {
-      layout = layout.replace(/<html\b/, "<html suppressHydrationWarning");
+    if (!nextLayout.includes("suppressHydrationWarning")) {
+      nextLayout = nextLayout.replace(/<html\b/, "<html suppressHydrationWarning");
     }
-    layout = ensureInspectorInLayout(layout, loadLucaInspectorScript());
-    byPath.set("app/layout.tsx", layout);
+    nextLayout = ensureInspectorInLayout(nextLayout, loadLucaInspectorScript());
+    byPath.set("app/layout.tsx", nextLayout);
   }
 
   byPath.set("public/luca-inspector.js", loadLucaInspectorScript());
@@ -362,11 +427,21 @@ export async function syncPreviewWorkspace(
   };
   byPath.set("package.json", `${JSON.stringify(workspacePkg, null, 2)}\n`);
 
-  await materializeLucaApiImages(byPath, dir);
+  for (const [p, code] of byPath.entries()) {
+    if (/\.(tsx?|jsx?|css|html)$/i.test(p)) {
+      let next = applyImageDataUrlsToCode(code, imageDataUrls);
+      next = rewriteLucaImageApiUrls(next, lucaOrigin);
+      byPath.set(p, next);
+    }
+  }
+
+  await materializeLucaApiImages(byPath, dir, lucaOrigin);
 
   for (const [rel, code] of byPath) {
     await writeText(path.join(dir, rel), code);
   }
+
+  await pruneStaleSourceFiles(dir, new Set(byPath.keys()));
 
   // Remove agent-written Tailwind v3 configs (v4 uses CSS + postcss only)
   for (const stale of [

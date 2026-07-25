@@ -48,6 +48,8 @@ Or set **`GEMINI_API_KEYS`** = comma-separated keys (if supported by your loader
 ## Preview (Phase 2 — after DigitalOcean worker)
 
 | `PREVIEW_WORKER_URL` | `https://preview.lucaai.app` |
+| `NEXT_PUBLIC_PREVIEW_ORIGIN` | Same as preview host — browser iframe URLs (`https://preview.lucaai.app`) |
+| `NEXT_PUBLIC_APP_URL` | `https://www.lucaai.app` — used when proxying preview sync for `/api/images` |
 
 Leave unset for Phase 1 — chat/build works; live iframe preview returns a clear “not configured” until you add this.
 
