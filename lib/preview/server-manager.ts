@@ -122,7 +122,7 @@ async function httpAlive(url: string, timeoutMs = 1500): Promise<boolean> {
   }
 }
 
-async function waitForReady(port: number, timeoutMs = 180_000): Promise<void> {
+async function waitForReady(port: number, timeoutMs = 120_000): Promise<void> {
   const start = Date.now();
   const url = previewReadyCheckUrl(port);
   while (Date.now() - start < timeoutMs) {
@@ -130,49 +130,6 @@ async function waitForReady(port: number, timeoutMs = 180_000): Promise<void> {
     await new Promise((r) => setTimeout(r, 500));
   }
   throw new Error(`Preview server on :${port} did not become ready in time`);
-}
-
-function useProductionPreview(): boolean {
-  if (process.env.PREVIEW_USE_DEV === "1") return false;
-  return Boolean(process.env.PREVIEW_PUBLIC_ORIGIN?.trim());
-}
-
-async function runNextCli(
-  cwd: string,
-  args: string[],
-  env: NodeJS.ProcessEnv,
-  timeoutMs: number,
-): Promise<void> {
-  const bin = nextBinPath();
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [bin, ...args], {
-      cwd,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
-    let err = "";
-    child.stderr?.on("data", (c) => {
-      err += c.toString();
-    });
-    child.stdout?.on("data", () => {});
-    const timer = setTimeout(() => {
-      if (child.pid) void killPid(child.pid);
-      reject(new Error(`next ${args.join(" ")} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve();
-      else {
-        reject(
-          new Error(
-            `next ${args.join(" ")} failed (${code}): ${err.slice(-4000)}`,
-          ),
-        );
-      }
-    });
-    child.on("error", reject);
-  });
 }
 
 async function killPid(pid: number): Promise<void> {
@@ -266,7 +223,7 @@ async function startProcess(
   const cwd = workspaceDirFor(chatId);
   const bin = nextBinPath();
   const previewBasePath = previewBasePathForPort(port);
-  const production = useProductionPreview() && Boolean(previewBasePath);
+  const behindPublicProxy = Boolean(previewBasePath);
 
   const previewEnv: NodeJS.ProcessEnv = {
     ...process.env,
@@ -275,31 +232,27 @@ async function startProcess(
     ...(previewBasePath
       ? { LUCA_PREVIEW_BASE_PATH: previewBasePath }
       : {}),
+    ...(behindPublicProxy
+      ? {
+          LUCA_PREVIEW_NO_HMR: "1",
+          __NEXT_DISABLE_FAST_REFRESH: "true",
+        }
+      : {}),
   };
 
-  if (production) {
-    console.info(`[preview] production build :${port} chat=${chatId}`);
-    await runNextCli(
+  const child = spawn(
+    process.execPath,
+    [bin, "dev", "--webpack", "--port", String(port), "--hostname", "127.0.0.1"],
+    {
       cwd,
-      ["build"],
-      { ...previewEnv, NODE_ENV: "production" },
-      300_000,
-    );
-  }
-
-  const startArgs = production
-    ? ["start", "-p", String(port), "-H", "127.0.0.1"]
-    : ["dev", "--webpack", "--port", String(port), "--hostname", "127.0.0.1"];
-
-  const child = spawn(process.execPath, [bin, ...startArgs], {
-    cwd,
-    env: {
-      ...previewEnv,
-      NODE_ENV: production ? "production" : "development",
+      env: {
+        ...previewEnv,
+        NODE_ENV: "development",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     },
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
-  });
+  );
 
   const managed: Managed = {
     child,

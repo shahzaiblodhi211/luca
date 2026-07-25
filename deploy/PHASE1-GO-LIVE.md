@@ -2,7 +2,7 @@
 
 ### Monorepo note
 
-Root `vercel.json` uses a `services.frontend` block (Next.js at repo root). The preview worker under `services/preview-worker/` is **not** deployed on Vercel (Phase 2 on DigitalOcean). Do not add a nested `package.json` under `services/preview-worker/` — it makes Vercel treat the repo as multi-service.
+Do **not** use a `services` block in root `vercel.json` for this app — it makes Vercel deploy with no Next.js output (site shows **404 NOT_FOUND**). Use top-level `framework` / `installCommand` / `buildCommand` only. The preview worker under `services/preview-worker/` is Phase 2 on DigitalOcean; keep no nested `package.json` there so Vercel stays a single Next.js project.
 
 ---
 Do these in order. Preview iframe (DigitalOcean) is **Phase 2** — skip `PREVIEW_WORKER_URL` for now.

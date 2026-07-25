@@ -3,7 +3,24 @@
 Copy each name into **Vercel → Project → Settings → Environment Variables**  
 (Production + Preview + Development as you prefer).
 
-## Required
+### Bulk import (recommended)
+
+From repo root:
+
+```powershell
+npx tsx scripts/generate-vercel-env.mts
+```
+
+Open **`deploy/vercel-env-import.env`** (gitignored — contains secrets). In Vercel → **Environment Variables** → **Import .env** → select that file → apply to **Production** (and Preview if you want) → **Redeploy**.
+
+Optional: set production URL before generating:
+
+```powershell
+$env:VERCEL_APP_URL="https://lucaai.app"
+npx tsx scripts/generate-vercel-env.mts
+```
+
+---
 
 | Name | Notes |
 |------|--------|
