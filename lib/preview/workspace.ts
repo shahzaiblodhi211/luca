@@ -19,6 +19,17 @@ import {
   workspaceDirFor,
 } from "./paths";
 import { ensureInspectorInLayout } from "./luca-inspector-layout";
+import {
+  resolveNextUiStubFiles,
+  SCAFFOLD_GITIGNORE,
+  SCAFFOLD_GLOBALS_CSS,
+  SCAFFOLD_LAYOUT,
+  SCAFFOLD_NEXT_CONFIG,
+  SCAFFOLD_POSTCSS,
+  SCAFFOLD_THEME_PROVIDER,
+  SCAFFOLD_TSCONFIG,
+  SCAFFOLD_UTILS,
+} from "./scaffold";
 
 function lucaAppOrigin(): string {
   return (
@@ -34,17 +45,8 @@ function rewriteLucaImageApiUrls(code: string): string {
   if (!origin) return code;
   return code.replace(/(["'`])\/api\/images\//g, `$1${origin}/api/images/`);
 }
-import {
-  resolveNextUiStubFiles,
-  SCAFFOLD_GITIGNORE,
-  SCAFFOLD_GLOBALS_CSS,
-  SCAFFOLD_LAYOUT,
-  SCAFFOLD_NEXT_CONFIG,
-  SCAFFOLD_POSTCSS,
-  SCAFFOLD_THEME_PROVIDER,
-  SCAFFOLD_TSCONFIG,
-  SCAFFOLD_UTILS,
-} from "./scaffold";
+
+const API_IMAGE_ID = /\/api\/images\/([a-f0-9]{24})/gi;
 
 function loadLucaInspectorScript(): string {
   return readFileSync(
@@ -94,6 +96,55 @@ async function writeText(filePath: string, contents: string) {
 async function writeBinary(filePath: string, buf: Buffer) {
   await ensureDir(path.dirname(filePath));
   await fs.writeFile(filePath, buf);
+}
+
+/** Download Luca-hosted images into workspace public/ and rewrite src paths. */
+async function materializeLucaApiImages(
+  byPath: Map<string, string>,
+  dir: string,
+): Promise<void> {
+  const origin = lucaAppOrigin();
+  if (!origin) return;
+
+  const ids = new Set<string>();
+  for (const code of byPath.values()) {
+    for (const m of code.matchAll(new RegExp(API_IMAGE_ID.source, "gi"))) {
+      ids.add(m[1]!.toLowerCase());
+    }
+  }
+
+  const idToPublic = new Map<string, string>();
+  for (const id of ids) {
+    try {
+      const res = await fetch(`${origin}/api/images/${id}`, {
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!res.ok) continue;
+      const ct = res.headers.get("content-type") || "image/png";
+      const ext = ct.includes("jpeg")
+        ? "jpg"
+        : ct.includes("webp")
+          ? "webp"
+          : ct.includes("svg")
+            ? "svg"
+            : "png";
+      const rel = `public/luca-images/${id}.${ext}`;
+      const buf = Buffer.from(await res.arrayBuffer());
+      await writeBinary(path.join(dir, rel), buf);
+      idToPublic.set(id, `/${rel.replace(/^public\//, "")}`);
+    } catch {
+      /* keep /api/images or absolute rewrite */
+    }
+  }
+
+  for (const [p, code] of byPath.entries()) {
+    if (!/\.(tsx?|jsx?|css|html)$/i.test(p)) continue;
+    let next = code;
+    for (const [id, publicPath] of idToPublic) {
+      next = next.replaceAll(`/api/images/${id}`, publicPath);
+    }
+    byPath.set(p, next);
+  }
 }
 
 function parseDataUrl(dataUrl: string): { mime: string; buf: Buffer } | null {
@@ -310,6 +361,8 @@ export async function syncPreviewWorkspace(
     dependencies: deps,
   };
   byPath.set("package.json", `${JSON.stringify(workspacePkg, null, 2)}\n`);
+
+  await materializeLucaApiImages(byPath, dir);
 
   for (const [rel, code] of byPath) {
     await writeText(path.join(dir, rel), code);

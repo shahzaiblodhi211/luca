@@ -25,6 +25,13 @@ export function previewBasePathForPort(port: number): string | null {
   return `${prefix}/${port}`;
 }
 
+/** Health-check URL on loopback (includes basePath when proxied). */
+export function previewReadyCheckUrl(port: number): string {
+  const base = previewBasePathForPort(port);
+  if (base) return `${previewInternalOrigin(port)}${base}/`;
+  return `${previewInternalOrigin(port)}/`;
+}
+
 export function withPublicPreviewUrl<T extends { port: number; url: string }>(
   info: T,
 ): T {

@@ -1,6 +1,8 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { loader } from "@monaco-editor/react";
+import * as monaco from "monaco-editor";
 import {
   ChevronDown,
   ChevronRight,
@@ -13,15 +15,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectFile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
-  ssr: false,
-  loading: () => (
-    <div className="flex h-full min-h-[200px] items-center justify-center gap-2 text-sm text-zinc-500">
-      <Loader2 className="h-4 w-4 animate-spin" />
-      Loading editor…
-    </div>
-  ),
-});
+if (typeof window !== "undefined") {
+  loader.config({ monaco });
+}
+
+const MonacoEditor = dynamic(
+  () => import("@monaco-editor/react").then((m) => m.default),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex h-full min-h-[240px] items-center justify-center gap-2 text-sm text-zinc-500">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading editor…
+      </div>
+    ),
+  },
+);
 
 type TreeNode = {
   name: string;
@@ -194,17 +203,25 @@ export function ProjectCodeEditor({
   onFilesChange?: (files: ProjectFile[]) => void;
 }) {
   const editorWrapRef = useRef<HTMLDivElement>(null);
-  const [editorHeight, setEditorHeight] = useState(480);
+  const [editorHeight, setEditorHeight] = useState(520);
+  const [monacoFailed, setMonacoFailed] = useState(false);
+
+  useEffect(() => {
+    void loader
+      .init()
+      .then(() => setMonacoFailed(false))
+      .catch(() => setMonacoFailed(true));
+  }, []);
 
   useEffect(() => {
     const el = editorWrapRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
       const h = el.clientHeight;
-      if (h > 120) setEditorHeight(h);
+      if (h >= 200) setEditorHeight(h);
     });
     ro.observe(el);
-    setEditorHeight(Math.max(el.clientHeight, 320));
+    if (el.clientHeight >= 200) setEditorHeight(el.clientHeight);
     return () => ro.disconnect();
   }, []);
 
@@ -276,7 +293,7 @@ export function ProjectCodeEditor({
         </span>
       </div>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         <aside className="w-52 shrink-0 overflow-y-auto border-r border-zinc-800 bg-zinc-950/80">
           <div className="px-2 py-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
             Files · {sorted.length}
@@ -296,41 +313,70 @@ export function ProjectCodeEditor({
 
         <div
           ref={editorWrapRef}
-          className="relative min-h-[320px] min-w-0 flex-1"
+          className="relative min-h-[360px] min-w-0 flex-1 self-stretch"
         >
           {activeFile ? (
-            <MonacoEditor
-              height={editorHeight}
-              theme="vs-dark"
-              path={activeFile.path}
-              language={languageFromPath(activeFile.path)}
-              value={activeFile.code}
-              onChange={(value) => {
-                if (value == null || !onFilesChange) return;
-                const path = activeFile.path.replace(/^\/+/, "");
-                onFilesChange(
-                  files.map((f) =>
-                    f.path.replace(/^\/+/, "") === path
-                      ? { ...f, code: value }
-                      : f,
-                  ),
-                );
-              }}
-              options={{
-                fontSize: 13,
-                fontFamily:
-                  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-                minimap: { enabled: false },
-                scrollBeyondLastLine: false,
-                wordWrap: "on",
-                tabSize: 2,
-                automaticLayout: true,
-                padding: { top: 12, bottom: 12 },
-                renderLineHighlight: "line",
-                smoothScrolling: true,
-                readOnly: !onFilesChange,
-              }}
-            />
+            monacoFailed ? (
+              <textarea
+                className="h-full w-full resize-none bg-zinc-950 p-4 font-mono text-[13px] leading-relaxed text-zinc-200 outline-none"
+                style={{ minHeight: editorHeight }}
+                value={activeFile.code}
+                readOnly={!onFilesChange}
+                onChange={(e) => {
+                  if (!onFilesChange) return;
+                  const path = activeFile.path.replace(/^\/+/, "");
+                  onFilesChange(
+                    files.map((f) =>
+                      f.path.replace(/^\/+/, "") === path
+                        ? { ...f, code: e.target.value }
+                        : f,
+                    ),
+                  );
+                }}
+                spellCheck={false}
+              />
+            ) : (
+              <MonacoEditor
+                key={activePath}
+                height={editorHeight}
+                theme="vs-dark"
+                path={activeFile.path}
+                language={languageFromPath(activeFile.path)}
+                value={activeFile.code}
+                onChange={(value) => {
+                  if (value == null || !onFilesChange) return;
+                  const path = activeFile.path.replace(/^\/+/, "");
+                  onFilesChange(
+                    files.map((f) =>
+                      f.path.replace(/^\/+/, "") === path
+                        ? { ...f, code: value }
+                        : f,
+                    ),
+                  );
+                }}
+                onValidate={() => {}}
+                loading={
+                  <div className="flex h-full min-h-[240px] items-center justify-center gap-2 text-sm text-zinc-500">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading editor…
+                  </div>
+                }
+                options={{
+                  fontSize: 13,
+                  fontFamily:
+                    "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                  minimap: { enabled: false },
+                  scrollBeyondLastLine: false,
+                  wordWrap: "on",
+                  tabSize: 2,
+                  automaticLayout: true,
+                  padding: { top: 12, bottom: 12 },
+                  renderLineHighlight: "line",
+                  smoothScrolling: true,
+                  readOnly: !onFilesChange,
+                }}
+              />
+            )
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-zinc-500">
               Select a file

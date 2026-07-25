@@ -7,9 +7,8 @@ export function ensureInspectorInLayout(
     .replace(/import Script from ["']next\/script["'];\s*\n?/g, "")
     .replace(/<Script[\s\S]*?luca-inspector[\s\S]*?\/>/gi, "")
     .replace(/<script[\s\S]*?luca-inspector[\s\S]*?<\/script>/gi, "")
+    .replace(/<script[\s\S]*?luca-inspector-inline[\s\S]*?<\/script>/gi, "")
     .replace(/<script[\s\S]*?luca-inspector[\s\S]*?\/>/gi, "");
-
-  if (out.includes("luca-inspector-inline")) return out;
 
   const tag = `
         <script

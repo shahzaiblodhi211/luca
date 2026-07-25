@@ -546,10 +546,11 @@ export function CodePreview({
               {status === "syncing" && !baseUrl && (
                 <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-zinc-950/90 text-sm text-zinc-300">
                   <Loader2 className="h-6 w-6 animate-spin text-emerald-500" />
-                  <p>Starting Next.js preview…</p>
+                  <p>Building Next.js preview…</p>
                   <p className="max-w-sm text-center text-xs text-zinc-500">
-                    First run installs dependencies into a local runtime (one-time).
-                    Full App Router + API routes supported.
+                    Production build on preview server (first load can take 1–3
+                    minutes on a 2 GB droplet). Full App Router + client
+                    interactivity.
                   </p>
                 </div>
               )}
