@@ -101,7 +101,12 @@ function PlansModal({
         error?: string;
         message?: string;
         billing?: PublicBilling;
+        checkoutUrl?: string;
       };
+      if (data.checkoutUrl) {
+        window.location.href = data.checkoutUrl;
+        return;
+      }
       if (!res.ok) {
         setMessage(data.error || "Could not change plan.");
         return;
@@ -253,7 +258,7 @@ function PlansModal({
                       className={cn(
                         "flex h-10 w-full items-center justify-center gap-2 rounded-xl text-sm font-semibold transition-colors disabled:opacity-60",
                         isPopular
-                          ? "bg-white text-black hover:bg-zinc-200"
+                          ? "bg-emerald-600 text-white hover:bg-emerald-500"
                           : "border border-zinc-600 bg-transparent text-white hover:border-zinc-400 hover:bg-zinc-800",
                       )}
                     >

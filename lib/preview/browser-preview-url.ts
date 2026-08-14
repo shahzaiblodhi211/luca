@@ -42,14 +42,15 @@ export function resolvePreviewIframeBase(
     payload.previewOrigin?.replace(/\/+$/, "") || clientPreviewOrigin();
   const basePath =
     payload.previewBasePath?.replace(/\/+$/, "") ||
-    (port != null ? `${pathPrefix()}/${port}` : null);
+    (port != null && publicOrigin ? `${pathPrefix()}/${port}` : null);
 
   if (publicOrigin && basePath) {
     return `${publicOrigin}${basePath}/`;
   }
 
+  // Local dev — iframe loads the loopback preview server directly
   if (/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?/i.test(raw)) {
-    return null;
+    return raw.endsWith("/") ? raw : `${raw}/`;
   }
 
   return raw.endsWith("/") ? raw : `${raw}/`;

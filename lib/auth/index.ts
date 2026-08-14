@@ -3,3 +3,4 @@ export * from "./password";
 export * from "./users";
 export * from "./session";
 export * from "./reset";
+export * from "./notifications";

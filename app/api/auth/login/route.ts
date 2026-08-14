@@ -7,6 +7,7 @@ import {
   setSessionCookie,
   toPublicUser,
   verifyPassword,
+  sendSignInNoticeEmail,
 } from "@/lib/auth";
 
 export const runtime = "nodejs";
@@ -28,7 +29,16 @@ export async function POST(req: Request) {
     }
 
     const user = await findUserByEmail(email);
-    if (!user || !(await verifyPassword(password, user.passwordHash))) {
+    if (!user?.passwordHash) {
+      return NextResponse.json(
+        {
+          error:
+            "This account uses Google, GitHub, or Apple sign-in. Use that provider instead.",
+        },
+        { status: 401 },
+      );
+    }
+    if (!(await verifyPassword(password, user.passwordHash))) {
       return NextResponse.json(
         { error: "Incorrect email or password." },
         { status: 401 },
@@ -38,6 +48,16 @@ export async function POST(req: Request) {
     const publicUser = toPublicUser(user);
     const token = await createSessionToken(publicUser);
     await setSessionCookie(token);
+
+    const ipHint =
+      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      req.headers.get("x-real-ip")?.trim() ||
+      undefined;
+    sendSignInNoticeEmail({
+      email: user.email,
+      name: user.name,
+      ipHint,
+    });
 
     return NextResponse.json({ user: publicUser });
   } catch (err) {

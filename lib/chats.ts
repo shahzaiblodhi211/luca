@@ -9,25 +9,83 @@ import type {
   ChatMessage,
   ChatSummary,
   ProjectFile,
+  ProjectSummary,
 } from "./types";
 import { applyDeletedFiles, mergeProjectFiles } from "./project-files";
+import {
+  resolveChatTitleUpdate,
+  type ChatTitleMeta,
+} from "./chat-title";
 import {
   applyImageUrlsToFiles,
   resolveImageJobs,
   type ImageJob,
 } from "./resolve-images";
 import { getImageById, toDataUrl } from "./image-store";
+import { cleanupChatPreview } from "./preview/cleanup-chat";
 
 export async function listChats(
   userId: string,
-  limit = 40,
+  limit = 100,
 ): Promise<ChatSummary[]> {
   if (!userId) return [];
   const col = await getChatsCollection();
   const docs = await col
     .find(
       { userId },
-      { projection: { title: 1, createdAt: 1, updatedAt: 1 } },
+      {
+        projection: {
+          title: 1,
+          projectId: 1,
+          files: 1,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+    )
+    .sort({ updatedAt: -1 })
+    .limit(limit)
+    .toArray();
+
+  return docs.map((d) => {
+    const hasFiles = Array.isArray(d.files) && d.files.length > 0;
+    const projectId =
+      typeof d.projectId === "string" && d.projectId.trim()
+        ? d.projectId.trim()
+        : null;
+    return {
+      id: d._id,
+      title: d.title,
+      createdAt: new Date(d.createdAt).toISOString(),
+      updatedAt: new Date(d.updatedAt).toISOString(),
+      projectId,
+      hasProject: hasFiles || Boolean(projectId),
+    };
+  });
+}
+
+/** Chats where Luca generated code files (real projects only). */
+export async function listProjects(
+  userId: string,
+  limit = 100,
+): Promise<ProjectSummary[]> {
+  if (!userId) return [];
+  const col = await getChatsCollection();
+  const docs = await col
+    .find(
+      {
+        userId,
+        "files.0": { $exists: true },
+      },
+      {
+        projection: {
+          title: 1,
+          projectId: 1,
+          files: 1,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
     )
     .sort({ updatedAt: -1 })
     .limit(limit)
@@ -36,6 +94,8 @@ export async function listChats(
   return docs.map((d) => ({
     id: d._id,
     title: d.title,
+    projectId: d.projectId ?? null,
+    fileCount: Array.isArray(d.files) ? d.files.length : 0,
     createdAt: new Date(d.createdAt).toISOString(),
     updatedAt: new Date(d.updatedAt).toISOString(),
   }));
@@ -79,7 +139,8 @@ export async function createChat(
   const doc: ChatDoc = {
     _id: nanoid(),
     userId,
-    title: titleFromPrompt(content || attachments[0]?.name || "Untitled chat"),
+    title: titleFromPrompt(content || attachments[0]?.name || "New chat"),
+    titleAiUpdates: 0,
     messages: [userMessage],
     projectId: null,
     files: [],
@@ -116,6 +177,54 @@ export async function setChatLucaModelTier(
     { _id: chatId },
     { $set: { lucaModelTier, updatedAt: new Date() } },
   );
+}
+
+export async function setChatTitle(
+  chatId: string,
+  title: string,
+  meta?: ChatTitleMeta,
+): Promise<void> {
+  const col = await getChatsCollection();
+  await col.updateOne(
+    { _id: chatId },
+    {
+      $set: {
+        title,
+        updatedAt: new Date(),
+        ...(meta?.titleAiUpdates !== undefined
+          ? { titleAiUpdates: meta.titleAiUpdates }
+          : {}),
+        ...(meta?.firstPromptGreeting !== undefined
+          ? { firstPromptGreeting: meta.firstPromptGreeting }
+          : {}),
+      },
+    },
+  );
+}
+
+/** AI chat title: greeting on first prompt, one rename when intent appears. */
+export async function maybeUpdateChatTitle(
+  chatId: string,
+  chat: ChatDoc,
+  latestUserMessage: string,
+): Promise<string | null> {
+  const userMessages = chat.messages
+    .filter((m) => m.role === "user")
+    .map((m) => m.content);
+
+  const patch = await resolveChatTitleUpdate({
+    titleAiUpdates: chat.titleAiUpdates,
+    firstPromptGreeting: chat.firstPromptGreeting,
+    userMessages,
+    latestUserMessage,
+  });
+  if (!patch || patch.title === chat.title) return null;
+
+  await setChatTitle(chatId, patch.title, {
+    titleAiUpdates: patch.titleAiUpdates,
+    firstPromptGreeting: patch.firstPromptGreeting,
+  });
+  return patch.title;
 }
 
 /** Attach clone screenshots (etc.) to the latest user message for chat UI. */
@@ -371,7 +480,11 @@ export async function deleteChat(
   if (!userId) return false;
   const col = await getChatsCollection();
   const result = await col.deleteOne({ _id: id, userId });
-  return result.deletedCount > 0;
+  if (result.deletedCount > 0) {
+    await cleanupChatPreview(id);
+    return true;
+  }
+  return false;
 }
 
 export async function updateChatFiles(

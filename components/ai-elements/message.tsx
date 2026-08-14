@@ -37,8 +37,10 @@ export type MessageProps = HTMLAttributes<HTMLDivElement> & {
 export const Message = ({ className, from, ...props }: MessageProps) => (
   <div
     className={cn(
-      "group flex w-full max-w-[95%] flex-col gap-2",
-      from === "user" ? "is-user ml-auto justify-end" : "is-assistant",
+      "group flex w-full flex-col gap-1",
+      from === "user"
+        ? "is-user ml-auto max-w-[min(100%,42rem)] items-end"
+        : "is-assistant max-w-none items-start",
       className
     )}
     {...props}
@@ -54,11 +56,11 @@ export const MessageContent = ({
 }: MessageContentProps) => (
   <div
     className={cn(
-      "is-user:dark flex w-fit min-w-0 max-w-full flex-col gap-2 text-sm",
+      "flex w-fit min-w-0 max-w-full flex-col gap-2",
       // Clip only user bubbles; assistant replies must not be overflow-hidden
       // (that was clipping/stripping long thoughts and markdown).
-      "group-[.is-user]:ml-auto group-[.is-user]:overflow-hidden group-[.is-user]:rounded-lg group-[.is-user]:bg-secondary group-[.is-user]:px-4 group-[.is-user]:py-3 group-[.is-user]:text-foreground",
-      "group-[.is-assistant]:w-full group-[.is-assistant]:max-w-none group-[.is-assistant]:text-foreground",
+      "group-[.is-user]:overflow-hidden group-[.is-user]:rounded-[22px] group-[.is-user]:bg-user-bubble-bg group-[.is-user]:px-4 group-[.is-user]:py-2.5 group-[.is-user]:text-[15px] group-[.is-user]:font-normal group-[.is-user]:leading-[1.5] group-[.is-user]:text-user-bubble-fg",
+      "group-[.is-assistant]:w-full group-[.is-assistant]:max-w-none group-[.is-assistant]:text-base group-[.is-assistant]:font-normal group-[.is-assistant]:leading-[1.75] group-[.is-assistant]:tracking-normal group-[.is-assistant]:text-[#ececec]",
       className
     )}
     {...props}
@@ -74,7 +76,10 @@ export const MessageActions = ({
   children,
   ...props
 }: MessageActionsProps) => (
-  <div className={cn("flex items-center gap-1", className)} {...props}>
+  <div
+    className={cn("flex items-center gap-0.5 text-message-action-icon", className)}
+    {...props}
+  >
     {children}
   </div>
 );
@@ -93,7 +98,13 @@ export const MessageAction = ({
   ...props
 }: MessageActionProps) => {
   const button = (
-    <Button size={size} type="button" variant={variant} {...props}>
+    <Button
+      className="text-inherit hover:bg-transparent hover:text-message-action-icon-hover disabled:opacity-40"
+      size={size}
+      type="button"
+      variant={variant}
+      {...props}
+    >
       {children}
       <span className="sr-only">{label || tooltip}</span>
     </Button>

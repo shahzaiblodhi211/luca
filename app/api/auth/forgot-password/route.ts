@@ -16,12 +16,14 @@ export async function POST(req: Request) {
     }
 
     const result = await requestPasswordReset(email);
+    const isProd = process.env.NODE_ENV === "production";
     return NextResponse.json({
       ok: true,
       message:
-        "If an account exists for that email, we sent a reset link.",
-      // Dev convenience — never returned in production
-      resetUrl: result.resetUrl,
+        "If an account exists for that email, we sent a reset link and 6-digit code.",
+      ...(isProd
+        ? {}
+        : { resetUrl: result.resetUrl, shortCode: result.shortCode }),
     });
   } catch (err) {
     console.error("[auth/forgot-password]", err);

@@ -3,12 +3,19 @@ import {
   parseAgentEventLines,
   type AgentStreamEvent,
 } from "@/lib/agent/events";
+import {
+  clearChatGenerationCancel,
+  isChatGenerationCancelled,
+  registerChatGenerationCancel,
+  unregisterChatGenerationCancel,
+} from "@/lib/agent/generation-cancel";
 import { streamAgentEvents } from "@/lib/agent/run-agent";
 import {
   appendAssistantMessage,
   appendAttachmentsToLastUserMessage,
   appendUserMessage,
   getChat,
+  maybeUpdateChatTitle,
   setChatThinkingLevel,
   setChatLucaModelTier,
 } from "@/lib/chats";
@@ -22,6 +29,7 @@ import {
   getGeminiModelForUser,
   refundChatCredit,
   syncUserBilling,
+  toPublicBilling,
 } from "@/lib/billing";
 import { runWithGeminiModel } from "@/lib/gemini";
 import {
@@ -391,6 +399,8 @@ export async function runChatGeneration(
     throw new Error("chatId required");
   }
 
+  clearChatGenerationCancel(chatId);
+
   const { getSessionUser } = await import("@/lib/auth");
   const user = await getSessionUser();
   if (!user) throw new Error("Sign in to continue this chat.");
@@ -422,6 +432,10 @@ export async function runChatGeneration(
 
   await debitChatCredit(user.id);
   let credited = true;
+  const billedDoc = await syncUserBilling(user.id);
+  if (billedDoc) {
+    onEvent({ type: "billing", billing: toPublicBilling(billedDoc) });
+  }
 
   const attachments = attachmentIds.length
     ? await resolveAttachmentMetas(attachmentIds)
@@ -444,6 +458,15 @@ export async function runChatGeneration(
     await appendAttachmentsToLastUserMessage(chatId, attachments);
     chat = (await getChat(chatId))!;
   }
+
+  void (async () => {
+    try {
+      const nextTitle = await maybeUpdateChatTitle(chatId, chat, message);
+      if (nextTitle) onEvent({ type: "chat_title", title: nextTitle });
+    } catch (err) {
+      console.warn("[chat-title]", err);
+    }
+  })();
 
   const { turns, cloneAttachments, cloneSourceUrl } =
     await buildTurnsWithProjectContext(chat);
@@ -473,6 +496,10 @@ export async function runChatGeneration(
     const decoder = new TextDecoder();
     let buffer = "";
 
+    registerChatGenerationCancel(chatId, () => {
+      void reader.cancel();
+    });
+
     const acc: Acc = {
     content: "",
     projectId: chat.projectId,
@@ -488,6 +515,14 @@ export async function runChatGeneration(
 
   try {
     while (true) {
+      if (isChatGenerationCancelled(chatId)) {
+        try {
+          await reader.cancel();
+        } catch {
+          /* ignore */
+        }
+        break;
+      }
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
@@ -506,22 +541,40 @@ export async function runChatGeneration(
       }
     }
   } finally {
+    unregisterChatGenerationCancel(chatId);
     reader.releaseLock();
   }
 
+  const wasCancelled = isChatGenerationCancelled(chatId);
+  clearChatGenerationCancel(chatId);
+
   const parts = partsFromAcc(acc);
-  await appendAssistantMessage(chatId, {
-    content: acc.content,
-    parts,
-    projectId: acc.projectId,
-    files: [...acc.files.values()],
-    packages: Object.fromEntries(acc.packages),
-    imageJobs: acc.images,
-    deleted: acc.deleted,
-  });
+  const hasAssistantContent =
+    Boolean(acc.content.trim()) ||
+    parts.some((p) => p.type !== "thinking" || p.text.trim());
+
+  if (hasAssistantContent) {
+    await appendAssistantMessage(chatId, {
+      content: acc.content,
+      parts,
+      projectId: acc.projectId,
+      files: [...acc.files.values()],
+      packages: Object.fromEntries(acc.packages),
+      imageJobs: acc.images,
+      deleted: acc.deleted,
+    });
+  }
+
+  if (wasCancelled) {
+    return;
+  }
   } catch (err) {
     if (credited && !(err instanceof BillingError)) {
       await refundChatCredit(user.id);
+      const refundedDoc = await syncUserBilling(user.id);
+      if (refundedDoc) {
+        onEvent({ type: "billing", billing: toPublicBilling(refundedDoc) });
+      }
     }
     throw err;
   }

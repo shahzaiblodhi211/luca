@@ -9,7 +9,7 @@ export const maxDuration = 300;
 
 type Props = {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ start?: string }>;
+  searchParams: Promise<{ start?: string; model?: string }>;
 };
 
 export default async function ChatPage({ params, searchParams }: Props) {
@@ -37,7 +37,7 @@ export default async function ChatPage({ params, searchParams }: Props) {
         initialProjectId={chat.projectId}
         initialImageDataUrls={imageDataUrls}
         initialPackages={chat.packages ?? {}}
-        initialLucaModelTier={chat.lucaModelTier}
+        initialLucaModelTier={chat.lucaModelTier ?? sp.model ?? null}
         autoStart={sp.start === "1" && chat.messages.length === 1}
       />
     </AppShell>

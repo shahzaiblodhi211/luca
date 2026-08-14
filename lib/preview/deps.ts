@@ -1,17 +1,14 @@
-import { resolveSandpackDependencies } from "@/lib/sandpack-deps";
+import {
+  PREINSTALLED_PACKAGES,
+  resolveSandpackDependencies,
+} from "@/lib/sandpack-deps";
 import type { ProjectFile } from "@/lib/types";
 
-/** Core packages every preview workspace needs. */
-export const PREVIEW_CORE_DEPS: Record<string, string> = {
+/** Host/runtime packages pinned for every preview workspace. */
+const PREVIEW_HOST_DEPS: Record<string, string> = {
   next: "16.2.10",
   react: "19.2.4",
   "react-dom": "19.2.4",
-  "lucide-react": "0.469.0",
-  clsx: "2.1.1",
-  "tailwind-merge": "2.6.0",
-  "class-variance-authority": "0.7.1",
-  "@radix-ui/react-slot": "1.1.1",
-  "framer-motion": "11.15.0",
   tailwindcss: "4.1.11",
   "@tailwindcss/postcss": "4.1.11",
   typescript: "5.8.3",
@@ -19,6 +16,14 @@ export const PREVIEW_CORE_DEPS: Record<string, string> = {
   "@types/react": "19.1.2",
   "@types/react-dom": "19.1.2",
 };
+
+/** Core packages every preview workspace needs (includes preinstalled UI libs). */
+export const PREVIEW_CORE_DEPS: Record<string, string> = {
+  ...PREVIEW_HOST_DEPS,
+  ...PREINSTALLED_PACKAGES,
+};
+
+export { PREINSTALLED_PACKAGES };
 
 export function resolvePreviewDependencies(
   files: ProjectFile[],
@@ -30,8 +35,8 @@ export function resolvePreviewDependencies(
     ...inferred,
     ...explicitPackages,
     // Keep Next/React pinned to host-compatible versions
-    next: PREVIEW_CORE_DEPS.next,
-    react: PREVIEW_CORE_DEPS.react,
-    "react-dom": PREVIEW_CORE_DEPS["react-dom"],
+    next: PREVIEW_HOST_DEPS.next,
+    react: PREVIEW_HOST_DEPS.react,
+    "react-dom": PREVIEW_HOST_DEPS["react-dom"],
   };
 }

@@ -68,7 +68,9 @@ const lines: string[] = [
   `GEMINI_MODEL=${local.GEMINI_MODEL ?? "gemini-3.5-flash-lite"}`,
   `GEMINI_THINKING_LEVEL=${local.GEMINI_THINKING_LEVEL ?? "HIGH"}`,
   "",
-  `IMAGE_PROVIDER=${local.IMAGE_PROVIDER ?? "pollinations"}`,
+  `IMAGE_PROVIDER=${local.IMAGE_PROVIDER ?? "auto"}`,
+  `GEMINI_IMAGE_MODEL=${local.GEMINI_IMAGE_MODEL ?? "gemini-3.1-flash-lite-image"}`,
+  local.PEXELS_API_KEY ? `PEXELS_API_KEY=${local.PEXELS_API_KEY}` : "",
   `POLLINATIONS_MODEL=${local.POLLINATIONS_MODEL ?? "flux"}`,
   "",
 ];
@@ -91,12 +93,56 @@ if (local.GEMINI_POOL_RPM) {
   lines.push("", `GEMINI_POOL_RPM=${local.GEMINI_POOL_RPM}`);
 }
 
-if (local.RESEND_API_KEY?.trim()) {
+if (local.SMTP_HOST?.trim() && local.SMTP_USER?.trim()) {
+  lines.push(
+    "",
+    "# Zoho SMTP (info@lucaai.app)",
+    `SMTP_HOST=${local.SMTP_HOST}`,
+    `SMTP_PORT=${local.SMTP_PORT ?? "465"}`,
+    `SMTP_SECURE=${local.SMTP_SECURE ?? "1"}`,
+    `SMTP_USER=${local.SMTP_USER}`,
+    `SMTP_PASS=${local.SMTP_PASS ?? ""}`,
+    `AUTH_EMAIL_FROM=${local.AUTH_EMAIL_FROM ?? "luca Team <info@lucaai.app>"}`,
+    `AUTH_EMAIL_REPLY_TO=${local.AUTH_EMAIL_REPLY_TO ?? "info@lucaai.app"}`,
+  );
+} else if (local.RESEND_API_KEY?.trim()) {
   lines.push(
     "",
     `RESEND_API_KEY=${local.RESEND_API_KEY}`,
-    `AUTH_EMAIL_FROM=${local.AUTH_EMAIL_FROM ?? "Luca AI <noreply@lucaai.app>"}`,
+    `AUTH_EMAIL_FROM=${local.AUTH_EMAIL_FROM ?? "luca Team <info@lucaai.app>"}`,
   );
+}
+
+const oauthKeys = [
+  "GOOGLE_CLIENT_ID",
+  "GOOGLE_CLIENT_SECRET",
+  "GITHUB_CLIENT_ID",
+  "GITHUB_CLIENT_SECRET",
+  "APPLE_CLIENT_ID",
+  "APPLE_TEAM_ID",
+  "APPLE_KEY_ID",
+  "APPLE_PRIVATE_KEY",
+] as const;
+const oauthSet = oauthKeys.some((k) => local[k]?.trim());
+if (oauthSet) {
+  lines.push("", "# OAuth");
+  for (const k of oauthKeys) {
+    if (local[k]?.trim()) lines.push(`${k}=${local[k]}`);
+  }
+}
+
+const polarKeys = [
+  "POLAR_ACCESS_TOKEN",
+  "POLAR_SERVER",
+  "POLAR_WEBHOOK_SECRET",
+  "POLAR_PRODUCT_ID_PLUS",
+  "POLAR_PRODUCT_ID_PRO",
+] as const;
+if (polarKeys.some((k) => local[k]?.trim())) {
+  lines.push("", "# Polar billing");
+  for (const k of polarKeys) {
+    if (local[k]?.trim()) lines.push(`${k}=${local[k]}`);
+  }
 }
 
 lines.push(

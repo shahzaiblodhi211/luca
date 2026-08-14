@@ -1,32 +1,36 @@
-import { createHash, randomBytes } from "crypto";
+import { createHash, randomBytes, randomInt } from "crypto";
 import { nanoid } from "nanoid";
 import {
   getPasswordResetsCollection,
   findUserByEmail,
   updateUserPassword,
 } from "./users";
-import { validatePassword } from "./password";
+import { validatePassword, normalizeEmail } from "./password";
+import { appBaseUrl } from "./app-url";
+import {
+  emailTransportConfigured,
+  passwordResetEmail,
+  sendEmail,
+} from "@/lib/email";
 
 const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
+const RESET_CODE_TTL_MIN = 60;
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-export function appBaseUrl(): string {
-  const fromEnv =
-    process.env.NEXT_PUBLIC_APP_URL?.trim() ||
-    process.env.APP_URL?.trim();
-  if (fromEnv) return fromEnv.replace(/\/$/, "");
-  if (process.env.VERCEL_URL)
-    return `https://${process.env.VERCEL_URL.replace(/\/$/, "")}`;
-  return "http://localhost:3000";
+function generateShortCode(): string {
+  return String(randomInt(100_000, 1_000_000));
 }
+
+export { appBaseUrl } from "./app-url";
 
 /** Always returns ok (no email enumeration). Includes resetUrl in non-production. */
 export async function requestPasswordReset(email: string): Promise<{
   ok: true;
   resetUrl?: string;
+  shortCode?: string;
 }> {
   const user = await findUserByEmail(email);
   if (!user) {
@@ -35,10 +39,11 @@ export async function requestPasswordReset(email: string): Promise<{
 
   const rawToken = randomBytes(32).toString("hex");
   const tokenHash = hashToken(rawToken);
+  const shortCode = generateShortCode();
+  const codeHash = hashToken(shortCode);
   const col = await getPasswordResetsCollection();
   const now = new Date();
 
-  // Invalidate previous unused tokens for this user
   await col.updateMany(
     { userId: user._id, usedAt: { $exists: false } },
     { $set: { usedAt: now } },
@@ -48,49 +53,42 @@ export async function requestPasswordReset(email: string): Promise<{
     _id: nanoid(),
     userId: user._id,
     tokenHash,
+    codeHash,
     expiresAt: new Date(now.getTime() + RESET_TTL_MS),
     createdAt: now,
   });
 
   const resetUrl = `${appBaseUrl()}/reset-password?token=${rawToken}`;
+  const mail = passwordResetEmail({
+    name: user.name,
+    resetUrl,
+    shortCode,
+    expiresMinutes: RESET_CODE_TTL_MIN,
+  });
 
-  // Optional Resend — otherwise log for local testing
-  const resendKey = process.env.RESEND_API_KEY?.trim();
-  const from = process.env.AUTH_EMAIL_FROM?.trim() || "Luca AI <onboarding@resend.dev>";
-  if (resendKey) {
-    try {
-      const res = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${resendKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          from,
-          to: [user.email],
-          subject: "Reset your Luca password",
-          html: [
-            `<p>Hi ${user.name},</p>`,
-            `<p>Reset your Luca password with this link (expires in 1 hour):</p>`,
-            `<p><a href="${resetUrl}">${resetUrl}</a></p>`,
-            `<p>If you didn't ask for this, you can ignore this email.</p>`,
-          ].join(""),
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        console.error("[auth] Resend failed:", res.status, body.slice(0, 300));
-      }
-    } catch (err) {
-      console.error("[auth] Resend error:", err);
+  if (emailTransportConfigured()) {
+    const sent = await sendEmail({
+      to: user.email,
+      subject: mail.subject,
+      html: mail.html,
+      text: mail.text,
+      replyTo: "info@lucaai.app",
+    });
+    if (!sent.ok) {
+      console.error("[auth] Password reset email failed:", sent.error);
     }
   } else {
-    console.info(`[auth] Password reset link for ${user.email}: ${resetUrl}`);
+    console.info(
+      `[auth] Password reset for ${user.email} — link: ${resetUrl} code: ${shortCode}`,
+    );
   }
 
-  return process.env.NODE_ENV === "production"
-    ? { ok: true }
-    : { ok: true, resetUrl };
+  const devExtras =
+    process.env.NODE_ENV === "production"
+      ? {}
+      : { resetUrl, shortCode };
+
+  return { ok: true, ...devExtras };
 }
 
 export async function resetPasswordWithToken(
@@ -107,10 +105,81 @@ export async function resetPasswordWithToken(
     return { ok: false, error: "This reset link is invalid or has expired." };
   }
 
-  await updateUserPassword(doc.userId, password);
-  await col.updateOne(
-    { _id: doc._id },
-    { $set: { usedAt: new Date() } },
-  );
+  await finishReset(doc._id, doc.userId, password);
   return { ok: true };
+}
+
+export async function verifyPasswordResetCode(
+  email: string,
+  code: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const user = await findUserByEmail(normalizeEmail(email));
+  if (!user) {
+    return { ok: false, error: "Invalid code or email." };
+  }
+
+  const normalized = code.replace(/\D/g, "").trim();
+  if (normalized.length !== 6) {
+    return { ok: false, error: "Enter the 6-digit code from your email." };
+  }
+
+  const codeHash = hashToken(normalized);
+  const col = await getPasswordResetsCollection();
+  const doc = await col.findOne({
+    userId: user._id,
+    codeHash,
+    usedAt: { $exists: false },
+    expiresAt: { $gt: new Date() },
+  });
+
+  if (!doc) {
+    return { ok: false, error: "Invalid or expired code." };
+  }
+
+  return { ok: true };
+}
+
+export async function resetPasswordWithCode(
+  email: string,
+  code: string,
+  password: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const pwErr = validatePassword(password);
+  if (pwErr) return { ok: false, error: pwErr };
+
+  const user = await findUserByEmail(normalizeEmail(email));
+  if (!user) {
+    return { ok: false, error: "Invalid code or email." };
+  }
+
+  const normalized = code.replace(/\D/g, "").trim();
+  if (normalized.length !== 6) {
+    return { ok: false, error: "Enter the 6-digit code from your email." };
+  }
+
+  const codeHash = hashToken(normalized);
+  const col = await getPasswordResetsCollection();
+  const doc = await col.findOne({
+    userId: user._id,
+    codeHash,
+    usedAt: { $exists: false },
+    expiresAt: { $gt: new Date() },
+  });
+
+  if (!doc) {
+    return { ok: false, error: "Invalid or expired code." };
+  }
+
+  await finishReset(doc._id, doc.userId, password);
+  return { ok: true };
+}
+
+async function finishReset(
+  resetId: string,
+  userId: string,
+  password: string,
+): Promise<void> {
+  await updateUserPassword(userId, password);
+  const col = await getPasswordResetsCollection();
+  await col.updateOne({ _id: resetId }, { $set: { usedAt: new Date() } });
 }

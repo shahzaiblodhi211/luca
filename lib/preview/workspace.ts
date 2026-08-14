@@ -419,7 +419,7 @@ export async function syncPreviewWorkspace(
     private: true,
     version: "0.0.0",
     scripts: {
-      dev: "next dev",
+      dev: "next dev --webpack",
       build: "next build",
       start: "next start",
     },

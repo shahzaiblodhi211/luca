@@ -16,6 +16,12 @@ import {
   rotateGeminiKey,
 } from "@/lib/gemini-keys";
 import { getGeminiModel, toGeminiContents, type ChatTurn } from "@/lib/gemini";
+import { formatThinkingText } from "@/lib/agent/format-thinking-text";
+import {
+  isReasoningLeakParagraph,
+  sanitizeVisibleReply,
+  splitReasoningLeak,
+} from "@/lib/agent/sanitize-visible-reply";
 import { buildDoneEvent, type AgentStreamEvent } from "@/lib/agent/events";
 import {
   streamGeminiGenerateContent,
@@ -519,9 +525,65 @@ export async function streamAgentEvents(
           let thoughtDeltaOpen = false;
           let thoughtSealed = false;
           let thoughtStartedAt = 0;
+          /** Hold first paragraph so meta-reasoning never streams into the chat bubble. */
+          let textLeadPending = "";
+          let textLeadChecked = false;
           /** Flash sometimes thinks → answers → thinks → rewrites. Replace text, don't concat. */
           let replaceTextOnNextDelta = false;
           const announcedToolSteps = new Set<string>();
+
+          const emitAnswerTextDelta = (delta: string) => {
+            if (!delta) return;
+            streamedText += delta;
+            if (!textDeltaOpen) {
+              textDeltaOpen = true;
+              emit({ type: "text", text: "" });
+            }
+            for (const piece of chunkForStream(delta, 48)) {
+              emit({ type: "text_delta", text: piece });
+            }
+          };
+
+          const emitThoughtTextDelta = (delta: string) => {
+            if (!delta) return;
+            streamedThought += delta;
+            if (!thoughtDeltaOpen) {
+              thoughtDeltaOpen = true;
+              thoughtSealed = false;
+              thoughtStartedAt = Date.now();
+              emit({ type: "thinking", text: "" });
+            }
+            for (const piece of chunkForStream(delta, 48)) {
+              emit({ type: "thinking_delta", text: piece });
+            }
+          };
+
+          const resolveTextLeadBuffer = () => {
+            if (textLeadChecked || !textLeadPending) return;
+            textLeadChecked = true;
+            const pending = textLeadPending;
+            textLeadPending = "";
+
+            const paraBreak = pending.search(/\n\n+/);
+            if (paraBreak >= 0) {
+              const first = pending.slice(0, paraBreak).trim();
+              const rest = pending.slice(paraBreak).replace(/^\n+/, "");
+              if (isReasoningLeakParagraph(first)) {
+                emitThoughtTextDelta(first);
+                if (rest.trim()) emitAnswerTextDelta(rest);
+                return;
+              }
+            }
+
+            const { leaked, visible } = splitReasoningLeak(pending);
+            if (leaked) {
+              emitThoughtTextDelta(leaked);
+              if (visible) emitAnswerTextDelta(visible);
+              return;
+            }
+
+            emitAnswerTextDelta(pending);
+          };
 
           const sealThought = () => {
             if (!thoughtDeltaOpen) return;
@@ -535,7 +597,7 @@ export async function streamAgentEvents(
               1,
               Math.min(60, elapsed || Math.round(words / 40) || 1),
             );
-            const thoughtBody = streamedThought.trim();
+            const thoughtBody = formatThinkingText(streamedThought.trim());
             if (thoughtBody) {
               state.thinking.push(thoughtBody);
             }
@@ -576,15 +638,20 @@ export async function streamAgentEvents(
                     replaceTextOnNextDelta = false;
                     streamedText = "";
                     textDeltaOpen = false;
+                    textLeadPending = "";
+                    textLeadChecked = false;
                   }
-                  streamedText += delta;
-                  if (!textDeltaOpen) {
-                    textDeltaOpen = true;
-                    emit({ type: "text", text: "" });
+                  if (!textLeadChecked) {
+                    textLeadPending += delta;
+                    if (
+                      textLeadPending.includes("\n\n") ||
+                      textLeadPending.length >= 360
+                    ) {
+                      resolveTextLeadBuffer();
+                    }
+                    return;
                   }
-                  for (const piece of chunkForStream(delta, 48)) {
-                    emit({ type: "text_delta", text: piece });
-                  }
+                  emitAnswerTextDelta(delta);
                 },
                 onThoughtDelta: (delta) => {
                   if (textDeltaOpen || (thoughtSealed && !thoughtDeltaOpen)) {
@@ -637,8 +704,14 @@ export async function streamAgentEvents(
             }
           }
 
+          if (!textLeadChecked && textLeadPending) {
+            resolveTextLeadBuffer();
+          }
+
           if (!functionCalls.length) {
-            const finalText = (streamedText || text).trim();
+            let finalText = sanitizeVisibleReply(
+              (streamedText || text).trim(),
+            );
             if (finalText) {
               if (!state.texts.includes(finalText)) {
                 state.texts.push(finalText);

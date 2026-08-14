@@ -3,6 +3,7 @@
 import { Brain, ChevronDown } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Shimmer } from "@/components/ai-elements/shimmer";
+import { formatThinkingText } from "@/lib/agent/format-thinking-text";
 import { cn } from "@/lib/utils";
 
 /** Collapsible reasoning row — brain when closed, chevron when open (v0-style). */
@@ -20,21 +21,22 @@ export function ThinkingLine({
   isStreaming?: boolean;
   thinkingActive?: boolean;
 }) {
-  const body = text.trim();
+  const body = formatThinkingText(text.trim());
   const turnLive = Boolean(isStreaming);
   const thinkLive =
     thinkingActive ?? (turnLive && durationSec == null);
   const sec =
     durationSec != null ? Math.max(1, durationSec) : thinkLive ? null : 1;
 
-  const [open, setOpen] = useState(thinkLive || turnLive || Boolean(body));
-  const wasTurnLiveRef = useRef(false);
-  const wasThinkLiveRef = useRef(false);
+  const [open, setOpen] = useState(thinkLive);
+  const wasThinkLiveRef = useRef(thinkLive);
 
+  // Open while reasoning streams; never re-open for the rest of the turn.
   useEffect(() => {
-    if (thinkLive || turnLive) setOpen(true);
-  }, [thinkLive, turnLive]);
+    if (thinkLive) setOpen(true);
+  }, [thinkLive]);
 
+  // Auto-collapse when thinking finishes (thinking_done / durationSec set).
   useEffect(() => {
     if (thinkLive) {
       wasThinkLiveRef.current = true;
@@ -46,21 +48,39 @@ export function ThinkingLine({
     return () => window.clearTimeout(timer);
   }, [thinkLive]);
 
-  useEffect(() => {
-    if (turnLive) {
-      wasTurnLiveRef.current = true;
-      return;
-    }
-    if (!wasTurnLiveRef.current) return;
-    wasTurnLiveRef.current = false;
-    const timer = window.setTimeout(() => setOpen(false), AUTO_CLOSE_MS);
-    return () => window.clearTimeout(timer);
-  }, [turnLive]);
-
   const showBody = open && (Boolean(body) || thinkLive || turnLive);
 
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [fade, setFade] = useState({ top: false, bottom: false });
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !showBody) {
+      setFade({ top: false, bottom: false });
+      return;
+    }
+
+    const update = () => {
+      const { scrollTop, scrollHeight, clientHeight } = el;
+      const overflow = scrollHeight > clientHeight + 2;
+      setFade({
+        top: overflow && scrollTop > 4,
+        bottom: overflow && scrollTop + clientHeight < scrollHeight - 4,
+      });
+    };
+
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    el.addEventListener("scroll", update, { passive: true });
+    return () => {
+      ro.disconnect();
+      el.removeEventListener("scroll", update);
+    };
+  }, [showBody, body, thinkLive]);
+
   const scrollClass = cn(
-    "h-full overflow-x-hidden overflow-y-auto overscroll-contain pl-1",
+    "max-h-[250px] overflow-x-hidden overflow-y-auto overscroll-contain pl-1",
   );
 
   const fadeTop = cn(
@@ -96,17 +116,13 @@ export function ThinkingLine({
       </button>
 
       {showBody ? (
-        <div
-          className={cn(
-            "relative h-[250px] min-h-[250px] max-h-[250px] overflow-hidden py-3",
-          )}
-        >
-          <div className={fadeTop} aria-hidden />
-          <div className={fadeBottom} aria-hidden />
-          <div className={cn("luca-thinking-scroll", scrollClass)}>
-            <div className="border-l border-zinc-600/70 py-3 pl-3 pr-2 text-[13px] leading-[1.55] text-zinc-500">
+        <div className="relative max-h-[250px] py-3">
+          {fade.top ? <div className={fadeTop} aria-hidden /> : null}
+          {fade.bottom ? <div className={fadeBottom} aria-hidden /> : null}
+          <div ref={scrollRef} className={cn("luca-thinking-scroll", scrollClass)}>
+            <div className="border-l border-zinc-600/70 py-2 pl-3 pr-2 text-[13px] leading-[1.55] text-zinc-500">
               {body ? (
-                <div className="whitespace-pre-wrap break-words">{text}</div>
+                <div className="whitespace-pre-wrap break-words">{body}</div>
               ) : (
                 <span className="text-zinc-600/70">…</span>
               )}

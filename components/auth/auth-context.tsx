@@ -10,6 +10,7 @@ import {
 } from "react";
 import type { PublicUser } from "@/lib/auth/types";
 import type { PublicBilling } from "@/lib/billing/types";
+import { AuthToastProvider } from "./auth-toast";
 
 export type AuthMode = "login" | "signup" | "forgot";
 
@@ -99,7 +100,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     ],
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthToastProvider>
+      <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+    </AuthToastProvider>
+  );
 }
 
 export function useAuthModal() {

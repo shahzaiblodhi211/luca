@@ -1,57 +1,28 @@
-import {
-  getGeminiKeys,
-  hasAvailableGeminiKey,
-  isCapacityMessage,
-  isDailyQuotaMessage,
-  isRateLimitMessage,
-  isRetryableGeminiError,
-  isRetryableGeminiMessage,
-  markGeminiKeyHot,
-  noteGeminiKeySuccess,
-  parseGeminiStatus,
-  pickGeminiKeyIndex,
-  releaseGeminiKey,
-} from "./gemini-keys";
+import { hasPexelsKey, requestPexelsImage } from "./pexels-image";
 
 export type ImageKind = "photo" | "logo" | "illustration";
 
 export type GeneratedImageBytes = {
   mimeType: string;
   base64: string;
-  source: "imagen" | "gemini" | "pollinations";
+  source: "imagen" | "gemini" | "pexels" | "pollinations";
   model: string;
+  /** Set when fetched from a stock CDN (Pexels). */
+  directUrl?: string;
+  attribution?: string;
 };
 
+export type ImageProviderMode = "pexels" | "auto" | "pollinations";
+
 /**
- * Free AI Studio keys usually have no usable Imagen / Nano Banana quota.
- * Default provider is Pollinations (no Google image model required).
- * Set IMAGE_PROVIDER=gemini to force Gemini native image models.
+ * Default `auto`: photos → Pexels (if key) else Pollinations; logos/illustrations → Pollinations.
+ * No Gemini image models — the account has no access to them.
  */
-export function getImageProvider(): "pollinations" | "gemini" | "auto" {
-  const raw = (process.env.IMAGE_PROVIDER || "pollinations").trim().toLowerCase();
-  if (raw === "gemini" || raw === "google" || raw === "imagen") return "gemini";
-  if (raw === "auto") return "auto";
-  return "pollinations";
-}
-
-/** @deprecated name kept for callers — returns configured Gemini image model. */
-export function getImagenModel(): string {
-  return (
-    process.env.IMAGEN_MODEL?.trim() ||
-    process.env.GEMINI_IMAGE_MODEL?.trim() ||
-    "gemini-2.5-flash-image"
-  );
-}
-
-function geminiImageModels(): string[] {
-  const primary = getImagenModel();
-  const envList = (process.env.GEMINI_IMAGE_MODELS || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return Array.from(
-    new Set([primary, ...envList, "gemini-2.5-flash-image"].filter(Boolean)),
-  );
+export function getImageProvider(): ImageProviderMode {
+  const raw = (process.env.IMAGE_PROVIDER || "auto").trim().toLowerCase();
+  if (raw === "pexels" || raw === "stock") return "pexels";
+  if (raw === "pollinations") return "pollinations";
+  return "auto";
 }
 
 const ASPECTS = new Set(["1:1", "3:4", "4:3", "9:16", "16:9"]);
@@ -116,37 +87,13 @@ function buildPrompt(
   ].join(" ");
 }
 
-type GeminiGenerateResponse = {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{
-        inlineData?: { mimeType?: string; data?: string };
-        inline_data?: { mime_type?: string; data?: string };
-      }>;
-    };
-  }>;
-  error?: { message?: string; code?: number; status?: string };
-};
-
-function isModelUnavailableError(message: string): boolean {
-  return (
-    /\b404\b/.test(message) ||
-    /no longer available|not found|not supported|is not found for API version|not available to new users|not supported for predict/i.test(
-      message,
-    )
-  );
-}
-
-/** Free text-to-image — no Google image-model quota required. */
 async function requestPollinationsImage(
   query: string,
   opts: { kind: ImageKind; aspect: string },
 ): Promise<GeneratedImageBytes> {
   const prompt = buildPrompt(query, opts.kind, opts.aspect);
   const { width, height } = aspectToSize(opts.aspect);
-  const model =
-    process.env.POLLINATIONS_MODEL?.trim() ||
-    (opts.kind === "logo" || opts.kind === "illustration" ? "flux" : "flux");
+  const model = process.env.POLLINATIONS_MODEL?.trim() || "flux";
 
   const url = new URL(
     `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}`,
@@ -156,12 +103,9 @@ async function requestPollinationsImage(
   url.searchParams.set("nologo", "true");
   url.searchParams.set("model", model);
   url.searchParams.set("enhance", opts.kind === "photo" ? "true" : "false");
-  // cache-bust so identical prompts still refresh when needed
   url.searchParams.set("seed", String(Date.now() % 1_000_000));
 
-  console.info(
-    `[image] pollinations model=${model} kind=${opts.kind} aspect=${opts.aspect} ${width}x${height}`,
-  );
+  console.info(`[image] pollinations model=${model} kind=${opts.kind}`);
 
   const response = await fetch(url.toString(), {
     method: "GET",
@@ -177,10 +121,7 @@ async function requestPollinationsImage(
 
   const mimeType = response.headers.get("content-type") || "image/jpeg";
   if (!mimeType.startsWith("image/")) {
-    const bodyText = await response.text().catch(() => "");
-    throw new Error(
-      `Pollinations returned non-image (${mimeType}): ${bodyText.slice(0, 160)}`,
-    );
+    throw new Error("Pollinations returned non-image payload");
   }
 
   const buf = Buffer.from(await response.arrayBuffer());
@@ -196,152 +137,30 @@ async function requestPollinationsImage(
   };
 }
 
-async function requestGeminiNativeImage(
-  apiKey: string,
-  model: string,
+async function generatePhotoAuto(
   query: string,
-  opts: { kind: ImageKind; aspect: string },
+  dims: { kind: ImageKind; aspect: string },
 ): Promise<GeneratedImageBytes> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: buildPrompt(query, opts.kind, opts.aspect) }],
-        },
-      ],
-      generationConfig: {
-        responseModalities: ["TEXT", "IMAGE"],
-        imageConfig: { aspectRatio: opts.aspect },
-      },
-    }),
-  });
-
-  const bodyText = await response.text().catch(() => "");
-  if (!response.ok) {
-    throw new Error(
-      `Gemini image ${response.status}: ${bodyText.slice(0, 400) || response.statusText}`,
-    );
-  }
-
-  let json: GeminiGenerateResponse;
-  try {
-    json = JSON.parse(bodyText) as GeminiGenerateResponse;
-  } catch {
-    throw new Error(`Gemini image invalid JSON: ${bodyText.slice(0, 200)}`);
-  }
-
-  if (json.error) {
-    throw new Error(
-      `Gemini image ${json.error.code ?? 500}: ${json.error.message || json.error.status || "failed"}`,
-    );
-  }
-
-  const parts = json.candidates?.[0]?.content?.parts || [];
-  for (const part of parts) {
-    const mime =
-      part.inlineData?.mimeType || part.inline_data?.mime_type || "";
-    const data = part.inlineData?.data || part.inline_data?.data || "";
-    if (data) {
+  if (hasPexelsKey()) {
+    try {
+      const pexels = await requestPexelsImage(query, dims);
       return {
-        mimeType: mime || "image/png",
-        base64: data.replace(/^data:[^;]+;base64,/, ""),
-        source: "gemini",
-        model,
+        mimeType: pexels.mimeType,
+        base64: pexels.base64,
+        source: "pexels",
+        model: pexels.model,
+        directUrl: pexels.directUrl,
+        attribution: pexels.attribution,
       };
-    }
-  }
-
-  throw new Error("Gemini image response contained no image bytes");
-}
-
-async function generateViaGemini(
-  query: string,
-  opts: { kind: ImageKind; aspect: string },
-): Promise<GeneratedImageBytes> {
-  const models = geminiImageModels();
-  const keys = getGeminiKeys();
-  let lastError = "All Gemini image keys failed";
-
-  for (const model of models) {
-    const maxAttempts = Math.min(12, Math.max(1, keys.length));
-    const skipped = new Set<number>();
-    let attempts = 0;
-    let modelDead = false;
-
-    while (
-      !modelDead &&
-      attempts < maxAttempts &&
-      skipped.size < keys.length
-    ) {
-      if (!hasAvailableGeminiKey("image")) break;
-
-      const keyIndex = pickGeminiKeyIndex("image");
-      if (skipped.has(keyIndex)) {
-        releaseGeminiKey("image", keyIndex);
-        attempts += 1;
-        continue;
-      }
-
-      attempts += 1;
-      console.info(
-        `[image] gemini key#${keyIndex + 1}/${keys.length} model=${model} attempt=${attempts}`,
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[image] pexels failed (${msg.slice(0, 120)}) — pollinations fallback`,
       );
-
-      try {
-        const result = await requestGeminiNativeImage(
-          keys[keyIndex],
-          model,
-          query,
-          opts,
-        );
-        noteGeminiKeySuccess("image", keyIndex);
-        console.info(`[image] ok gemini key#${keyIndex + 1} model=${model}`);
-        return result;
-      } catch (err) {
-        lastError = err instanceof Error ? err.message : String(err);
-        console.warn(
-          `[image] fail gemini key#${keyIndex + 1}:`,
-          lastError.slice(0, 180),
-        );
-        skipped.add(keyIndex);
-
-        if (isModelUnavailableError(lastError)) {
-          modelDead = true;
-          continue;
-        }
-
-        if (isDailyQuotaMessage(lastError)) {
-          markGeminiKeyHot("image", keyIndex, {
-            daily: true,
-            message: lastError,
-          });
-        } else if (
-          isCapacityMessage(lastError) ||
-          isRateLimitMessage(lastError) ||
-          /\b429\b/.test(lastError)
-        ) {
-          markGeminiKeyHot("image", keyIndex, { ms: 55_000 });
-        } else {
-          const status = parseGeminiStatus(lastError);
-          const retryable =
-            (status && isRetryableGeminiError(status, lastError)) ||
-            isRetryableGeminiMessage(lastError);
-          markGeminiKeyHot("image", keyIndex, {
-            ms: retryable ? 55_000 : 20_000,
-          });
-        }
-      } finally {
-        releaseGeminiKey("image", keyIndex);
-      }
     }
   }
 
-  throw new Error(lastError);
+  return requestPollinationsImage(query, dims);
 }
 
 export async function generateImagenImage(
@@ -353,27 +172,31 @@ export async function generateImagenImage(
 ): Promise<GeneratedImageBytes> {
   const kind = opts?.kind || "photo";
   const aspect = normalizeAspect(opts?.aspectHint, kind);
-  const provider = getImageProvider();
   const dims = { kind, aspect };
+  const provider = getImageProvider();
 
   if (provider === "pollinations") {
     return requestPollinationsImage(query, dims);
   }
 
-  if (provider === "gemini") {
-    return generateViaGemini(query, dims);
+  if (provider === "pexels" && kind === "photo") {
+    const pexels = await requestPexelsImage(query, dims);
+    return {
+      mimeType: pexels.mimeType,
+      base64: pexels.base64,
+      source: "pexels",
+      model: pexels.model,
+      directUrl: pexels.directUrl,
+      attribution: pexels.attribution,
+    };
   }
 
-  // auto: try Gemini briefly, then free Pollinations
-  try {
-    return await generateViaGemini(query, dims);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(
-      `[image] gemini unavailable (${msg.slice(0, 120)}) — falling back to pollinations`,
-    );
+  // auto — logos/illustrations always via Pollinations; photos prefer Pexels
+  if (kind === "logo" || kind === "illustration") {
     return requestPollinationsImage(query, dims);
   }
+
+  return generatePhotoAuto(query, dims);
 }
 
 /** @deprecated Prefer generateImagenImage — kept for route compatibility. */

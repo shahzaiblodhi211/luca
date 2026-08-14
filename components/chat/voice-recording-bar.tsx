@@ -97,8 +97,8 @@ export function VoiceRecordingBar({
   }, [active, busy]);
 
   return (
-    <div className="mt-1.5 flex h-8 min-h-8 w-full items-center gap-2">
-      <span className="shrink-0 font-mono text-[12px] tabular-nums text-zinc-400">
+    <div className="mt-1.5 flex h-9 min-h-9 w-full items-center gap-2">
+      <span className="shrink-0 font-mono text-[13px] tabular-nums text-composer-muted">
         {formatVoiceTimer(elapsedMs)}{" "}
         <span className="text-zinc-600">/ {formatVoiceTimer(maxMs)}</span>
       </span>
@@ -130,22 +130,22 @@ export function VoiceRecordingBar({
           type="button"
           disabled={busy}
           onClick={onCancel}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-400 disabled:opacity-40"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-full text-composer-icon transition-colors hover:bg-composer-icon-hover-bg hover:text-composer-icon-hover disabled:opacity-40"
           aria-label="Cancel recording"
         >
-          <X className="h-4 w-4" strokeWidth={2} />
+          <X className="h-5 w-5" strokeWidth={2} />
         </button>
         <button
           type="button"
           disabled={busy}
           onClick={onConfirm}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-emerald-600 text-white transition-colors hover:bg-emerald-500 disabled:opacity-60"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-emerald-600 text-white transition-colors hover:bg-emerald-500 disabled:opacity-60"
           aria-label="Use recording"
         >
           {busy ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <Loader2 className="h-5 w-5 animate-spin" />
           ) : (
-            <Check className="h-4 w-4" strokeWidth={2.25} />
+            <Check className="h-5 w-5" strokeWidth={2.25} />
           )}
         </button>
       </div>

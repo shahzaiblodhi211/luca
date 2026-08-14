@@ -8,9 +8,9 @@ import {
   FileCode2,
   Folder,
   FolderOpen,
-  Loader2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ShimmerLoader } from "@/components/ui/shimmer-block";
 import type { ProjectFile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -146,7 +146,7 @@ function FileTreeNode({
         className={cn(
           "flex w-full items-center gap-1.5 truncate px-2 py-1 text-left text-[12px]",
           active
-            ? "bg-sky-600/25 text-sky-100"
+            ? "bg-emerald-600/20 text-emerald-100 ring-1 ring-emerald-500/35"
             : "text-zinc-400 hover:bg-zinc-800/80 hover:text-zinc-200",
         )}
         style={{ paddingLeft: 8 + depth * 12 }}
@@ -168,7 +168,7 @@ function FileTreeNode({
             <Folder className="h-3.5 w-3.5 shrink-0 text-amber-400/80" />
           )
         ) : (
-          <FileCode2 className="h-3.5 w-3.5 shrink-0 text-sky-400/80" />
+          <FileCode2 className="h-3.5 w-3.5 shrink-0 text-emerald-400/80" />
         )}
         <span className="truncate">{node.name}</span>
       </button>
@@ -235,7 +235,7 @@ function SourceEditor({
   if (!useMonaco) {
     return (
       <textarea
-        className="absolute inset-0 h-full w-full resize-none bg-[#1e1e1e] p-4 font-mono text-[13px] leading-relaxed text-zinc-100 outline-none"
+        className="absolute inset-0 h-full w-full resize-none bg-[#0a0a0a] p-4 font-mono text-[13px] leading-relaxed text-zinc-100 outline-none ring-0 focus:ring-2 focus:ring-emerald-500/20"
         value={activeFile.code}
         readOnly={!onFilesChange}
         onChange={(e) => onCodeChange(e.target.value)}
@@ -247,23 +247,42 @@ function SourceEditor({
   return (
     <div className="absolute inset-0">
       {!monacoReady ? (
-        <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-[#1e1e1e] text-sm text-zinc-500">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Loading editor…
+        <div className="absolute inset-0 z-10 flex bg-[#0a0a0a]">
+          <ShimmerLoader label="Loading editor…" className="h-full w-full" compact />
         </div>
       ) : null}
       <MonacoEditor
         key={path}
         height="100%"
         width="100%"
-        theme="vs-dark"
+        theme="luca-dark"
         path={path}
         language={languageFromPath(activeFile.path)}
         value={activeFile.code ?? ""}
         onChange={(value) => {
           if (value != null) onCodeChange(value);
         }}
-        onMount={() => {
+        onMount={(_editor, monaco) => {
+          monaco.editor.defineTheme("luca-dark", {
+            base: "vs-dark",
+            inherit: true,
+            rules: [
+              { token: "comment", foreground: "71717a" },
+              { token: "keyword", foreground: "6ee7b7" },
+              { token: "string", foreground: "a7f3d0" },
+            ],
+            colors: {
+              "editor.background": "#0a0a0a",
+              "editor.foreground": "#e4e4e7",
+              "editorLineNumber.foreground": "#52525b",
+              "editorLineNumber.activeForeground": "#34d399",
+              "editor.lineHighlightBackground": "#052e1622",
+              "editor.selectionBackground": "#05966944",
+              "editorCursor.foreground": "#34d399",
+              "editorIndentGuide.background": "#27272a",
+            },
+          });
+          monaco.editor.setTheme("luca-dark");
           setMonacoReady(true);
           if (mountTimer.current) clearTimeout(mountTimer.current);
         }}
@@ -358,15 +377,18 @@ export function ProjectCodeEditor({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-zinc-950">
-      <div className="flex shrink-0 items-center gap-2 border-b border-zinc-800 px-3 py-1.5">
-        <span className="truncate font-mono text-xs text-zinc-400">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-zinc-800 bg-zinc-950/90 px-3 py-2">
+        <span className="truncate font-mono text-xs text-emerald-400/90">
           {activePath || "Select a file"}
+        </span>
+        <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-zinc-600">
+          Code
         </span>
       </div>
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <aside className="w-52 shrink-0 overflow-y-auto border-r border-zinc-800 bg-zinc-950/80">
-          <div className="px-2 py-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
+        <aside className="w-52 shrink-0 overflow-y-auto border-r border-zinc-800 bg-zinc-950">
+          <div className="border-b border-zinc-800/80 px-2 py-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
             Files · {sorted.length}
           </div>
           {tree.map((node) => (
@@ -382,7 +404,7 @@ export function ProjectCodeEditor({
           ))}
         </aside>
 
-        <div className="relative min-h-0 min-w-0 flex-1 bg-[#1e1e1e]">
+        <div className="relative min-h-0 min-w-0 flex-1 bg-[#0a0a0a] ring-1 ring-inset ring-zinc-800/80">
           {activeFile ? (
             <SourceEditor
               activeFile={activeFile}

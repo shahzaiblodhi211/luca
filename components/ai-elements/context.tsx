@@ -74,10 +74,10 @@ const ContextIcon = () => {
   return (
     <svg
       aria-hidden
-      height="18"
+      height="20"
       viewBox={`0 0 ${ICON_VIEWBOX} ${ICON_VIEWBOX}`}
-      width="18"
-      className="text-zinc-400"
+      width="20"
+      className="text-composer-icon"
     >
       <circle
         cx={ICON_CENTER}
@@ -121,13 +121,13 @@ export const ContextTrigger = ({ children, className, ...props }: ContextTrigger
           type="button"
           variant="ghost"
           className={cn(
-            "h-8 gap-1.5 rounded-full px-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100",
+            "h-9 gap-1.5 rounded-full px-2.5 text-composer-icon hover:bg-composer-icon-hover-bg hover:text-composer-icon-hover",
             className,
           )}
           {...props}
         >
           <ContextIcon />
-          <span className="text-[12px] font-medium tabular-nums text-zinc-300">
+          <span className="text-[13px] font-medium tabular-nums text-composer-fg">
             {renderedPercent}
           </span>
         </Button>
@@ -154,11 +154,16 @@ export const ContextContent = ({
   />
 );
 
-export type ContextContentHeaderProps = ComponentProps<"div">;
+export type ContextContentHeaderProps = ComponentProps<"div"> & {
+  title?: string;
+  quotaLabel?: string;
+};
 
 export const ContextContentHeader = ({
   children,
   className,
+  title = "Context used",
+  quotaLabel = "of window",
   ...props
 }: ContextContentHeaderProps) => {
   const { usedTokens, maxTokens } = useContextValue();
@@ -179,12 +184,14 @@ export const ContextContentHeader = ({
       {children ?? (
         <>
           <div className="flex items-center justify-between gap-3 text-xs">
-            <p className="font-medium text-zinc-200">Context used</p>
+            <p className="font-medium text-zinc-200">{title}</p>
             <p className="font-mono text-zinc-500">
               {used} / {total}
             </p>
           </div>
-          <p className="text-[11px] text-zinc-500">{displayPct} of window</p>
+          <p className="text-[11px] text-zinc-500">
+            {displayPct} {quotaLabel}
+          </p>
           <Progress value={usedPercent * PERCENT_MAX} />
         </>
       )}
@@ -230,6 +237,8 @@ const TokensLine = ({ label, tokens }: { label: string; tokens: number }) => (
     </span>
   </div>
 );
+
+export { TokensLine };
 
 export type ContextInputUsageProps = ComponentProps<"div">;
 

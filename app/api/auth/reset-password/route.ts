@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resetPasswordWithToken } from "@/lib/auth";
+import { resetPasswordWithToken, resetPasswordWithCode } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -7,18 +7,33 @@ export async function POST(req: Request) {
   try {
     const body = (await req.json()) as {
       token?: string;
+      email?: string;
+      code?: string;
       password?: string;
     };
-    const token = String(body.token || "").trim();
     const password = String(body.password || "");
-    if (!token) {
+    const token = String(body.token || "").trim();
+    const email = String(body.email || "").trim();
+    const code = String(body.code || "").trim();
+
+    if (!password) {
       return NextResponse.json(
-        { error: "Reset token is required." },
+        { error: "Password is required." },
         { status: 400 },
       );
     }
 
-    const result = await resetPasswordWithToken(token, password);
+    let result;
+    if (token) {
+      result = await resetPasswordWithToken(token, password);
+    } else if (email && code) {
+      result = await resetPasswordWithCode(email, code, password);
+    } else {
+      return NextResponse.json(
+        { error: "Use the reset link or enter email and 6-digit code." },
+        { status: 400 },
+      );
+    }
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: 400 });
     }

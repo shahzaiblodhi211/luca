@@ -3,49 +3,31 @@
 import { useMemo } from "react";
 import {
   Context,
-  ContextCacheUsage,
   ContextContent,
   ContextContentBody,
   ContextContentFooter,
   ContextContentHeader,
-  ContextInputUsage,
-  ContextOutputUsage,
-  ContextReasoningUsage,
   ContextTrigger,
+  TokensLine,
 } from "@/components/ai-elements/context";
+import { overallAccountUsage } from "@/lib/billing/overall-usage";
 import type { PublicBilling } from "@/lib/billing/types";
-import {
-  contextMaxTokensForTier,
-  contextModelIdForTier,
-  estimateContextUsage,
-} from "@/lib/chat-token-estimate";
+import { contextModelIdForTier } from "@/lib/chat-token-estimate";
 import type { LucaModelTier } from "@/lib/luca-model-tier";
 import { LUCA_MODEL_TIERS } from "@/lib/luca-model-tier";
 
-type MessageSlice = { role: string; content?: string };
-
 export function ComposerContextUsage({
-  messages = [],
-  draft = "",
   lucaModelTier,
   billing,
   disabled,
 }: {
-  messages?: MessageSlice[];
-  draft?: string;
   lucaModelTier: LucaModelTier;
   billing?: PublicBilling | null;
   disabled?: boolean;
 }) {
-  const usage = useMemo(
-    () => estimateContextUsage(messages, draft),
-    [messages, draft],
-  );
-
-  const maxTokens = contextMaxTokensForTier(lucaModelTier);
-  const usedTokens = Math.min(
-    maxTokens,
-    usage.inputTokens + usage.outputTokens,
+  const account = useMemo(
+    () => overallAccountUsage(billing, lucaModelTier),
+    [billing, lucaModelTier],
   );
 
   const creditsLabel =
@@ -57,25 +39,28 @@ export function ComposerContextUsage({
 
   return (
     <Context
-      maxTokens={maxTokens}
+      maxTokens={account.maxTokens}
       modelId={contextModelIdForTier(lucaModelTier)}
-      usedTokens={usedTokens}
+      usedTokens={account.usedTokens}
       usage={{
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-        reasoningTokens: usage.reasoningTokens,
-        cachedInputTokens: usage.cachedInputTokens,
-        totalTokens: usage.totalTokens,
+        inputTokens: account.usedToday,
+        outputTokens: account.remaining,
+        reasoningTokens: 0,
+        cachedInputTokens: 0,
+        totalTokens: account.usedTokens,
       }}
     >
       <ContextTrigger disabled={disabled} />
       <ContextContent>
-        <ContextContentHeader />
+        <ContextContentHeader
+          title={billing?.billingExempt ? "Context window" : "Credits used"}
+          quotaLabel={
+            billing?.billingExempt ? "of window" : "of monthly plan"
+          }
+        />
         <ContextContentBody>
-          <ContextInputUsage />
-          <ContextOutputUsage />
-          <ContextReasoningUsage />
-          <ContextCacheUsage />
+          <TokensLine label="Used today" tokens={account.usedToday} />
+          <TokensLine label="Remaining" tokens={account.remaining} />
         </ContextContentBody>
         <ContextContentFooter>
           <span className="text-zinc-500">

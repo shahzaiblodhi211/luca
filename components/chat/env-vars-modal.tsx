@@ -72,7 +72,7 @@ function Field({
       <div className="relative">
         <input
           className={cn(
-            "h-10 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm outline-none",
+            "h-10 w-full rounded-md border border-input bg-input-bg px-3 text-sm shadow-sm outline-none",
             "placeholder:text-muted-foreground/70 focus-visible:ring-1 focus-visible:ring-ring",
             secret && "pr-10",
           )}

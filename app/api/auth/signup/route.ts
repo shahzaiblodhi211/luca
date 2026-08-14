@@ -8,6 +8,7 @@ import {
   toPublicUser,
   validatePassword,
   findUserByEmail,
+  sendWelcomeEmail,
 } from "@/lib/auth";
 
 export const runtime = "nodejs";
@@ -49,6 +50,8 @@ export async function POST(req: Request) {
     const publicUser = toPublicUser(user);
     const token = await createSessionToken(publicUser);
     await setSessionCookie(token);
+
+    sendWelcomeEmail({ email: user.email, name: user.name });
 
     return NextResponse.json({ user: publicUser });
   } catch (err) {

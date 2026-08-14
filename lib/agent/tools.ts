@@ -16,6 +16,8 @@ import {
   projectLooksLikeBackend,
 } from "@/lib/agent/env-vars";
 import { assertInstallablePackage } from "@/lib/agent/packages";
+import { formatThinkingText } from "@/lib/agent/format-thinking-text";
+import { sanitizeVisibleReply } from "@/lib/agent/sanitize-visible-reply";
 import {
   ensureReactImport,
   ensureUseClientDirective,
@@ -180,14 +182,14 @@ export const AGENT_TOOL_DECLARATIONS = [
   {
     name: "think",
     description:
-      "Planning shown in the Reasoning panel. Include Awwwards art direction (anti–AI-template), fonts, hex tokens, route map, packages.",
+      "Planning shown in the Reasoning panel. Plain paragraphs only — no headings or bullet lists. Include art direction, fonts, hex tokens, route map, packages.",
     parameters: {
       type: "object",
       properties: {
         text: {
           type: "string",
           description:
-            "Start with what the user wants; then brand name, logo brief, thesis, fonts, colors, layout, routes, packages — never generic dark+cyan SaaS",
+            "Paragraphs only (no # headings). Start with what the user wants; then brand, thesis, fonts, colors, layout, routes, packages.",
         },
       },
       required: ["text"],
@@ -483,7 +485,7 @@ export async function executeAgentTool(
       };
     }
     case "think": {
-      const text = String(args.text || "").trim();
+      const text = formatThinkingText(String(args.text || "").trim());
       if (!text) return { ok: false, result: "think.text required", events: [] };
       state.thinking.push(text);
       const words = text.split(/\s+/).length;
@@ -1010,7 +1012,7 @@ export async function executeAgentTool(
       };
     }
     case "message_user": {
-      const text = String(args.text || "").trim();
+      const text = sanitizeVisibleReply(String(args.text || "").trim());
       if (!text) {
         return { ok: false, result: "message_user.text required", events: [] };
       }

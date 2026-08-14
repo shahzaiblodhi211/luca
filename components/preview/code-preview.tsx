@@ -7,7 +7,6 @@ import {
   Database,
   ExternalLink,
   Eye,
-  Loader2,
   MessageSquare,
   Monitor,
   MousePointer2,
@@ -28,6 +27,8 @@ import {
   type VisualEditDraft,
 } from "@/components/preview/visual-edit-panel";
 import { ProjectCodeEditor } from "@/components/preview/project-code-editor";
+import { Shimmer } from "@/components/ai-elements/shimmer";
+import { ShimmerLoader } from "@/components/ui/shimmer-block";
 import { previewApiUrl } from "@/lib/preview/client-api-url";
 import {
   formatPreviewDisplayUrl,
@@ -56,6 +57,20 @@ function filesFingerprint(
   return hash;
 }
 
+/** Enough source to boot `next dev` (scaffold fills layout/config). */
+function canWarmPreview(files: ProjectFile[]): boolean {
+  return files.some(
+    (f) =>
+      /\.(tsx|jsx)$/.test(f.path) &&
+      f.code.trim().length > 24 &&
+      !f.path.includes("node_modules"),
+  );
+}
+
+const PREVIEW_DEBOUNCE_STREAM_MS = 650;
+const PREVIEW_DEBOUNCE_IDLE_MS = 280;
+const PREVIEW_FIRST_WARM_MS = 150;
+
 type PreviewTool = "browse" | "visual";
 
 export function CodePreview({
@@ -64,8 +79,10 @@ export function CodePreview({
   chatId,
   imageDataUrls = {},
   packages = {},
-  /** While the agent is streaming, skip preview syncs (rebuild only when the turn ends). */
+  /** While Luca is streaming, keep warming the preview (debounced) instead of waiting for done. */
   streaming = false,
+  /** When false, sync runs silently; UI stays hidden until the turn ends. */
+  revealed = true,
   onPreviewReady,
   onFilesChange,
 }: {
@@ -75,6 +92,7 @@ export function CodePreview({
   imageDataUrls?: Record<string, string>;
   packages?: Record<string, string>;
   streaming?: boolean;
+  revealed?: boolean;
   onPreviewReady?: () => void;
   onFilesChange?: (files: ProjectFile[]) => void;
 }) {
@@ -99,6 +117,7 @@ export function CodePreview({
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const baseUrlRef = useRef<string | null>(null);
   const wasStreaming = useRef(false);
+  const wasRevealed = useRef(revealed);
   const lastSyncedFp = useRef<string>("");
   const inFlightFp = useRef<string | null>(null);
   const onReadyRef = useRef(onPreviewReady);
@@ -258,7 +277,7 @@ export function CodePreview({
       const gen = ++syncGen.current;
       inFlightFp.current = fp;
       const hadUrl = Boolean(baseUrlRef.current);
-      if (!hadUrl) setStatus("syncing");
+      if (revealed && !hadUrl) setStatus("syncing");
       setError(null);
       try {
         const res = await fetch(previewApiUrl(), {
@@ -319,7 +338,7 @@ export function CodePreview({
         if (inFlightFp.current === fp) inFlightFp.current = null;
       }
     },
-    [chatId, softReloadIframe],
+    [chatId, softReloadIframe, revealed],
   );
 
   const handleApplyVisual = useCallback(async () => {
@@ -356,22 +375,41 @@ export function CodePreview({
   );
 
   useEffect(() => {
-    if (!files.length || streaming) return;
-    if (contentFp === lastSyncedFp.current) return;
+    if (!files.length || !chatId || !canWarmPreview(files)) return;
+
+    const firstWarm = !lastSyncedFp.current && !baseUrlRef.current;
+    const debounceMs = firstWarm
+      ? PREVIEW_FIRST_WARM_MS
+      : streaming
+        ? PREVIEW_DEBOUNCE_STREAM_MS
+        : PREVIEW_DEBOUNCE_IDLE_MS;
+
     const t = setTimeout(() => {
       void syncPreview();
-    }, 450);
+    }, debounceMs);
     return () => clearTimeout(t);
-  }, [contentFp, files.length, streaming, syncPreview]);
+  }, [contentFp, files.length, streaming, syncPreview, chatId]);
 
   useEffect(() => {
-    if (wasStreaming.current && !streaming && files.length) {
-      if (contentFp !== lastSyncedFp.current) {
-        void syncPreview({ force: true });
+    if (wasStreaming.current && !streaming && files.length && canWarmPreview(files)) {
+      if (
+        contentFp !== lastSyncedFp.current &&
+        contentFp !== inFlightFp.current
+      ) {
+        void syncPreview();
       }
     }
     wasStreaming.current = streaming;
   }, [streaming, files.length, contentFp, syncPreview]);
+
+  useEffect(() => {
+    const justRevealed = revealed && !wasRevealed.current;
+    wasRevealed.current = revealed;
+    if (justRevealed && baseUrl) {
+      setStatus("ready");
+      setIframeKey((k) => k + 1);
+    }
+  }, [revealed, baseUrl]);
 
   useEffect(() => {
     if (!pageRoutes.length) return;
@@ -569,7 +607,7 @@ export function CodePreview({
         )}
       </div>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         {tab === "code" ? (
           <ProjectCodeEditor
             files={files}
@@ -578,20 +616,24 @@ export function CodePreview({
             onFilesChange={onFilesChange}
           />
         ) : (
-          <>
-            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col items-center bg-zinc-900">
-              {status === "syncing" && !baseUrl && (
-                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-zinc-950/90 text-sm text-zinc-300">
-                  <Loader2 className="h-6 w-6 animate-spin text-emerald-500" />
-                  <p>Starting Next.js preview…</p>
-                  <p className="max-w-sm text-center text-xs text-zinc-500">
-                    Runs <code className="text-zinc-400">next dev</code> on the
-                    preview server (no production build). First sync may install
-                    deps once.
-                  </p>
+          <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-zinc-900">
+              {revealed && status === "syncing" && !baseUrl && (
+                <div className="absolute inset-0 z-10 flex bg-zinc-950/90">
+                  <ShimmerLoader
+                    label="Starting Next.js preview…"
+                    className="h-full w-full"
+                  />
                 </div>
               )}
-              {status === "error" && (
+              {revealed && status === "syncing" && baseUrl && streaming && (
+                <div className="absolute right-3 top-3 z-10 rounded-lg border border-zinc-700/80 bg-zinc-950/90 px-2.5 py-1.5">
+                  <Shimmer className="text-[11px] text-zinc-400" duration={1}>
+                    Updating…
+                  </Shimmer>
+                </div>
+              )}
+              {revealed && status === "error" && (
                 <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-zinc-950 px-6 text-center">
                   <p className="text-sm text-red-400">Preview failed</p>
                   <pre className="max-h-40 max-w-lg overflow-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-900 p-3 text-left text-[11px] text-zinc-400">
@@ -611,10 +653,10 @@ export function CodePreview({
               {previewSrc ? (
                 <div
                   className={cn(
-                    "h-full min-h-0 shrink-0 bg-white transition-[width] duration-200",
+                    "flex min-h-0 w-full min-w-0 flex-1 flex-col bg-white",
                     viewport === "mobile"
-                      ? "w-[390px] max-w-full border-x border-zinc-800 shadow-xl"
-                      : "w-full",
+                      ? "mx-auto max-w-[390px] shrink-0 border-x border-zinc-800 shadow-xl"
+                      : "",
                   )}
                 >
                   <iframe
@@ -622,11 +664,13 @@ export function CodePreview({
                     key={`${iframeKey}:${previewSrc}:${viewport}`}
                     title="Next.js preview"
                     src={previewSrc}
-                    className="h-full w-full border-0 bg-white"
+                    className="min-h-0 w-full flex-1 border-0 bg-white"
                     sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
                   />
                 </div>
-              ) : null}
+              ) : (
+                <div className="min-h-0 flex-1 w-full min-w-0" aria-hidden />
+              )}
               {status === "ready" && baseUrl && previewTool !== "visual" && (
                 <div className="pointer-events-none absolute bottom-2 right-2 rounded bg-zinc-950/70 px-2 py-0.5 text-[10px] text-zinc-500">
                   {formatPreviewDisplayUrl(baseUrl, activePath)}
@@ -644,7 +688,7 @@ export function CodePreview({
                 applying={applying}
               />
             ) : null}
-          </>
+          </div>
         )}
       </div>
     </div>

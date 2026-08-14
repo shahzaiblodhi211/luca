@@ -7,6 +7,15 @@ import {
   type RunChatInput,
 } from "@/lib/agent/run-chat";
 
+export async function cancelChatGenerationAction(chatId: string) {
+  const id = chatId?.trim();
+  if (!id) return;
+  const { requestChatGenerationCancel } = await import(
+    "@/lib/agent/generation-cancel"
+  );
+  requestChatGenerationCancel(id);
+}
+
 /**
  * Keep-alive while waiting for Gemini (key hunt, 503 rotate, thinking).
  * Must stay under AI SDK's "slow to update" threshold (~3s).

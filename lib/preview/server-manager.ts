@@ -216,6 +216,30 @@ function nextBinPath(): string {
   );
 }
 
+/** Parent `next dev` may set TURBOPACK=*; preview runs `next dev --webpack` and must not inherit both. */
+function envForPreviewDev(
+  base: NodeJS.ProcessEnv,
+  previewBasePath?: string,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
+  for (const key of [
+    "TURBOPACK",
+    "NEXT_TURBOPACK",
+    "NEXT_PRIVATE_TURBOPACK",
+  ]) {
+    delete env[key];
+  }
+  return {
+    ...env,
+    BROWSER: "none",
+    NEXT_TELEMETRY_DISABLED: "1",
+    NODE_ENV: "development",
+    ...(previewBasePath
+      ? { LUCA_PREVIEW_BASE_PATH: previewBasePath }
+      : {}),
+  };
+}
+
 async function startProcess(
   chatId: string,
   port: number,
@@ -226,24 +250,12 @@ async function startProcess(
   const previewBasePath = previewBasePathForPort(port);
   await patchWorkspacePreviewBasePath(chatId, previewBasePath);
 
-  const previewEnv: NodeJS.ProcessEnv = {
-    ...process.env,
-    BROWSER: "none",
-    NEXT_TELEMETRY_DISABLED: "1",
-    ...(previewBasePath
-      ? { LUCA_PREVIEW_BASE_PATH: previewBasePath }
-      : {}),
-  };
-
   const child = spawn(
     process.execPath,
     [bin, "dev", "--webpack", "--port", String(port), "--hostname", "127.0.0.1"],
     {
       cwd,
-      env: {
-        ...previewEnv,
-        NODE_ENV: "development",
-      },
+      env: envForPreviewDev(process.env, previewBasePath ?? undefined),
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     },

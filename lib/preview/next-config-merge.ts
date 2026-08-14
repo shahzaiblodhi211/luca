@@ -35,6 +35,20 @@ export function ensurePreviewNextConfig(code: string): string {
     );
   }
 
+  if (!/\bdevIndicators\b/.test(next)) {
+    if (/(const\s+nextConfig\s*(?::\s*NextConfig\s*)?=\s*\{)/.test(next)) {
+      next = next.replace(
+        /(const\s+nextConfig\s*(?::\s*NextConfig\s*)?=\s*\{)/,
+        `$1\n  devIndicators: false,`,
+      );
+    } else if (/export\s+default\s*\{/.test(next)) {
+      next = next.replace(
+        /export\s+default\s*\{/,
+        `export default {\n  devIndicators: false,`,
+      );
+    }
+  }
+
   return `${next}\n`;
 }
 

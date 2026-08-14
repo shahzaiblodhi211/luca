@@ -2,12 +2,13 @@
 
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
-import { ResponseMarkdown } from "./response-markdown";
+import { ResponseMarkdown, ASSISTANT_MARKDOWN_CLASS } from "./response-markdown";
 import { ActionChips } from "./action-chips";
 import { BuildPhase } from "./build-phase";
 import { BuildStatusBar } from "./build-status-bar";
 import { MessageToolbarActions } from "./message-toolbar-actions";
 import { ThinkingLine } from "./thinking-line";
+import { sanitizeVisibleReply } from "@/lib/agent/sanitize-visible-reply";
 import type { AssistantPart, BuildPhasePart } from "@/lib/types";
 
 function hasVisibleContent(parts: AssistantPart[]) {
@@ -98,16 +99,17 @@ function groupParts(parts: AssistantPart[]): Group[] {
       continue;
     }
     if (part.type === "text") {
-      if (!part.text.trim() && out[out.length - 1]?.kind !== "text") {
+      const cleaned = sanitizeVisibleReply(part.text);
+      if (!cleaned.trim() && out[out.length - 1]?.kind !== "text") {
         out.push({ kind: "text", text: "" });
         continue;
       }
-      if (!part.text.trim()) continue;
+      if (!cleaned.trim()) continue;
       const last = out[out.length - 1];
       if (last?.kind === "text") {
-        last.text = last.text ? `${last.text}\n\n${part.text}` : part.text;
+        last.text = last.text ? `${last.text}\n\n${cleaned}` : cleaned;
       } else {
-        out.push({ kind: "text", text: part.text });
+        out.push({ kind: "text", text: cleaned });
       }
       continue;
     }
@@ -172,7 +174,7 @@ export function AssistantMessage({
       .join("\n\n");
 
     return (
-      <div className="space-y-3">
+      <div className="space-y-2">
         {groups.map((g, i) => {
           if (g.kind === "thinking") {
             if (!g.part.text?.trim() && !isStreaming) return null;
@@ -201,12 +203,9 @@ export function AssistantMessage({
           if (g.kind === "summary") {
             const md = g.lines.map((line) => `- ${line}`).join("\n");
             return (
-              <MessageResponse
-                key={`summary-${i}`}
-                className="text-sm text-zinc-300"
-              >
-                {md}
-              </MessageResponse>
+              <div key={`summary-${i}`} className={ASSISTANT_MARKDOWN_CLASS}>
+                <MessageResponse>{md}</MessageResponse>
+              </div>
             );
           }
           if (g.kind === "status") {

@@ -84,7 +84,7 @@ export function VisualEditPanel({
             value={draft.text}
             onChange={(e) => onDraftChange({ ...draft, text: e.target.value })}
             rows={4}
-            className="w-full resize-none rounded-lg border border-zinc-800 bg-zinc-900/80 px-2.5 py-2 text-xs text-zinc-200 outline-none ring-emerald-500/30 focus:border-emerald-600/50 focus:ring-2"
+            className="w-full resize-none rounded-lg border border-zinc-800 bg-input-bg px-2.5 py-2 text-xs text-zinc-200 outline-none ring-emerald-500/30 focus:border-emerald-600/50 focus:ring-2"
           />
         </section>
 
@@ -102,7 +102,7 @@ export function VisualEditPanel({
               })
             }
             placeholder="18"
-            className="h-8 w-full rounded-md border border-zinc-800 bg-zinc-900/80 px-2 text-xs text-zinc-200 outline-none focus:border-emerald-600/50"
+            className="h-8 w-full rounded-md border border-zinc-800 bg-input-bg px-2 text-xs text-zinc-200 outline-none focus:border-emerald-600/50"
           />
           <label className="block text-[11px] text-zinc-500">Weight</label>
           <select
@@ -110,7 +110,7 @@ export function VisualEditPanel({
             onChange={(e) =>
               onDraftChange({ ...draft, fontWeight: e.target.value })
             }
-            className="h-8 w-full rounded-md border border-zinc-800 bg-zinc-900/80 px-2 text-xs text-zinc-200 outline-none focus:border-emerald-600/50"
+            className="h-8 w-full rounded-md border border-zinc-800 bg-input-bg px-2 text-xs text-zinc-200 outline-none focus:border-emerald-600/50"
           >
             {WEIGHTS.map((w) => (
               <option key={w.value} value={w.value}>
@@ -140,7 +140,7 @@ export function VisualEditPanel({
             type="text"
             value={draft.color}
             onChange={(e) => onDraftChange({ ...draft, color: e.target.value })}
-            className="h-8 w-full rounded-md border border-zinc-800 bg-zinc-900/80 px-2 font-mono text-xs text-zinc-200 outline-none focus:border-emerald-600/50"
+            className="h-8 w-full rounded-md border border-zinc-800 bg-input-bg px-2 font-mono text-xs text-zinc-200 outline-none focus:border-emerald-600/50"
           />
         </section>
 

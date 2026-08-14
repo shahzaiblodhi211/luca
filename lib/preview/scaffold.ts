@@ -128,17 +128,17 @@ export const SCAFFOLD_GLOBALS_CSS = `@import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Neutral editorial baseline — agent MUST overwrite with a distinctive brand thesis */
+/* Unstyled neutral fallback — agent MUST overwrite with its own brand tokens */
 :root {
-  --bg: #f7f4ef;
+  --bg: #ffffff;
   --bg-elevated: #ffffff;
-  --fg: #1a1a1a;
-  --fg-muted: #6b6560;
-  --border: #e5dfd6;
-  --brand: #1a1a1a;
-  --brand-foreground: #f7f4ef;
-  --accent: #8a9a8b;
-  --radius: 0.15rem;
+  --fg: #111111;
+  --fg-muted: #737373;
+  --border: #e5e5e5;
+  --brand: #111111;
+  --brand-foreground: #ffffff;
+  --accent: #111111;
+  --radius: 0.25rem;
   --container: 72rem;
 
   --background: var(--bg);
@@ -151,7 +151,7 @@ export const SCAFFOLD_GLOBALS_CSS = `@import "tailwindcss";
   --primary-foreground: var(--brand-foreground);
   --secondary: var(--bg-elevated);
   --secondary-foreground: var(--fg);
-  --muted: #efeae3;
+  --muted: #f5f5f5;
   --muted-foreground: var(--fg-muted);
   --accent-foreground: var(--fg);
   --destructive: #b91c1c;
@@ -163,12 +163,12 @@ export const SCAFFOLD_GLOBALS_CSS = `@import "tailwindcss";
 .dark {
   --bg: #0c0c0c;
   --bg-elevated: #161616;
-  --fg: #f5f5f4;
-  --fg-muted: #a8a29e;
+  --fg: #f5f5f5;
+  --fg-muted: #a3a3a3;
   --border: #2a2a2a;
-  --brand: #f5f5f4;
+  --brand: #f5f5f5;
   --brand-foreground: #0c0c0c;
-  --accent: #8a9a8b;
+  --accent: #f5f5f5;
   --muted: #1c1c1c;
   --muted-foreground: var(--fg-muted);
 }
@@ -212,7 +212,7 @@ body {
 }
 
 .font-display, h1, h2, h3 {
-  font-family: var(--font-display), ui-serif, Georgia, serif;
+  font-family: var(--font-display), var(--font-body), ui-sans-serif, system-ui, sans-serif;
 }
 `;
 
@@ -279,6 +279,7 @@ export const SCAFFOLD_NEXT_CONFIG = `import type { NextConfig } from "next";
 const basePath = process.env.LUCA_PREVIEW_BASE_PATH?.trim() || undefined;
 
 const nextConfig: NextConfig = {
+  devIndicators: false,
   ...(basePath ? { basePath } : {}),
   images: {
     unoptimized: true,

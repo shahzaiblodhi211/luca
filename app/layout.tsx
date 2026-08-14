@@ -13,9 +13,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Luca AI — by Luca Technology",
+  title: {
+    default: "Luca AI — by Luca Technology",
+    template: "%s · Luca AI",
+  },
   description:
     "Luca AI by Luca Technology — generative UI builder for award-caliber sites and apps",
+  applicationName: "Luca AI",
 };
 
 export default function RootLayout({

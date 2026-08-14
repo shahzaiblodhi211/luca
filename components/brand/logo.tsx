@@ -31,7 +31,7 @@ export function LucaMark({
       aria-hidden
     >
       <Image
-        src="/brand/luca-mark.png"
+        src="/brand/luca-mark.svg"
         alt=""
         width={px}
         height={px}

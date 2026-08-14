@@ -20,8 +20,8 @@ import {
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import { useAuthModal } from "@/components/auth/auth-context";
-import { usePlansModal } from "@/components/billing/plans-modal";
 import { LucaMark } from "@/components/brand/logo";
+import { ShimmerBlock } from "@/components/ui/shimmer-block";
 import { cn } from "@/lib/utils";
 import type { ChatSummary } from "@/lib/types";
 import { useShell } from "./shell-context";
@@ -37,6 +37,54 @@ function userInitials(name?: string | null, email?: string | null) {
   return src.slice(0, 2).toUpperCase();
 }
 
+function UserAvatar({
+  name,
+  email,
+  imageUrl,
+  size = "md",
+}: {
+  name: string;
+  email: string;
+  imageUrl?: string;
+  size?: "sm" | "md";
+}) {
+  const dim = size === "sm" ? "h-6 w-6" : "h-8 w-8";
+  const text = size === "sm" ? "text-[10px]" : "text-[11px]";
+
+  if (imageUrl) {
+    return (
+      <img
+        src={imageUrl}
+        alt=""
+        width={size === "sm" ? 24 : 32}
+        height={size === "sm" ? 24 : 32}
+        className={cn(
+          "shrink-0 rounded-full object-cover bg-zinc-800 ring-1 ring-zinc-700/80",
+          dim,
+        )}
+        referrerPolicy="no-referrer"
+      />
+    );
+  }
+  return (
+    <div
+      className={cn(
+        "flex shrink-0 items-center justify-center rounded-full bg-zinc-100 font-bold text-zinc-900",
+        dim,
+        text,
+      )}
+    >
+      {userInitials(name, email)}
+    </div>
+  );
+}
+
+function accountHandle(user: { name: string; email: string }) {
+  const local = user.email.split("@")[0]?.trim();
+  if (local) return local;
+  return user.name.trim().split(/\s+/)[0]?.toLowerCase() || "user";
+}
+
 export function Sidebar({
   initialChats,
 }: {
@@ -46,7 +94,6 @@ export function Sidebar({
   const router = useRouter();
   const { openAuth, user, billing, loading: authLoading, logout } =
     useAuthModal();
-  const { openPlans } = usePlansModal();
   const { sidebarOpen, toggleSidebar } = useShell();
   const [chats, setChats] = useState<ChatSummary[]>(initialChats ?? []);
   const [recentOpen, setRecentOpen] = useState(true);
@@ -59,6 +106,9 @@ export function Sidebar({
   const accountRef = useRef<HTMLDivElement>(null);
 
   const isHome = pathname === "/";
+  const isProjects = pathname === "/projects";
+  const isChatsPage = pathname === "/chats";
+  const isChat = pathname.startsWith("/c/");
 
   useEffect(() => {
     let cancelled = false;
@@ -87,6 +137,22 @@ export function Sidebar({
       window.removeEventListener("focus", onFocus);
     };
   }, [pathname, user?.id]);
+
+  useEffect(() => {
+    function onChatTitle(e: Event) {
+      const detail = (e as CustomEvent<{ id: string; title: string }>).detail;
+      if (!detail?.id || !detail.title) return;
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === detail.id
+            ? { ...c, title: detail.title, updatedAt: new Date().toISOString() }
+            : c,
+        ),
+      );
+    }
+    window.addEventListener("luca-chat-title", onChatTitle);
+    return () => window.removeEventListener("luca-chat-title", onChatTitle);
+  }, []);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -149,12 +215,20 @@ export function Sidebar({
     : "Personal";
 
   const planLabel = billing?.planName ?? "Free";
-  const creditsHint =
-    billing && !billing.billingExempt
-      ? `${billing.creditsRemaining.toLocaleString()} credits left`
-      : billing?.billingExempt
-        ? "Unlimited usage"
-        : "Free plan";
+  const creditsBadgeTitle = billing?.billingExempt
+    ? "Unlimited credits"
+    : billing
+      ? `${billing.creditsRemainingToday.toLocaleString()} of ${billing.dailyCredits.toLocaleString()} credits left today`
+      : undefined;
+
+  const upgradeLabel =
+    billing?.billingExempt
+      ? null
+      : billing?.planId === "pro"
+        ? "Manage plan"
+        : billing?.planId === "plus"
+          ? "Upgrade to Pro"
+          : "Upgrade plan";
 
   return (
     <>
@@ -211,98 +285,19 @@ export function Sidebar({
             </button>
           </div>
 
-          {/* Workspace / account selector */}
-          <div className="relative mb-2" ref={accountRef}>
-            <button
-              type="button"
-              onClick={() => setAccountOpen((v) => !v)}
-              className="flex w-full items-center gap-2.5 rounded-xl border border-zinc-800/80 bg-zinc-900/40 px-2.5 py-2 text-left transition-colors hover:border-zinc-700 hover:bg-zinc-900"
-            >
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-emerald-500/15 text-[11px] font-semibold text-emerald-300 ring-1 ring-emerald-500/25">
-                {userInitials(user?.name, user?.email)}
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-[13px] font-medium text-zinc-100">
-                  {workspaceLabel}
-                </p>
-                {user ? (
-                  <p className="truncate text-[11px] text-zinc-500">
-                    {creditsHint}
-                  </p>
-                ) : (
-                  <p className="truncate text-[11px] text-zinc-500">
-                    Sign in to sync chats
-                  </p>
-                )}
-              </div>
-              {user && (
-                <span className="rounded-full bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium text-zinc-400">
-                  {planLabel}
-                </span>
-              )}
-              <ChevronDown
-                className={cn(
-                  "h-3.5 w-3.5 shrink-0 text-zinc-500 transition-transform",
-                  accountOpen && "rotate-180",
-                )}
-              />
-            </button>
-
-            {accountOpen && (
-              <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-50 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 py-1 shadow-2xl">
-                {user ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAccountOpen(false);
-                        openPlans();
-                      }}
-                      className="flex w-full px-3 py-2 text-left text-[13px] text-zinc-300 transition-colors hover:bg-zinc-900 hover:text-white"
-                    >
-                      Change plan
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAccountOpen(false);
-                        void logout().then(() => {
-                          setChats([]);
-                          router.push("/");
-                        });
-                      }}
-                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-zinc-300 transition-colors hover:bg-zinc-900 hover:text-white"
-                    >
-                      <LogOut className="h-3.5 w-3.5" />
-                      Sign out
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAccountOpen(false);
-                        openAuth("login");
-                      }}
-                      className="flex w-full px-3 py-2 text-left text-[13px] text-zinc-300 transition-colors hover:bg-zinc-900 hover:text-white"
-                    >
-                      Sign in
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAccountOpen(false);
-                        openAuth("signup");
-                      }}
-                      className="flex w-full px-3 py-2 text-left text-[13px] text-zinc-300 transition-colors hover:bg-zinc-900 hover:text-white"
-                    >
-                      Create free account
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
+          {/* Workspace label */}
+          <div className="mb-2 flex items-center gap-2.5 rounded-xl px-2.5 py-2">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-emerald-500/15 text-[11px] font-semibold text-emerald-300 ring-1 ring-emerald-500/25">
+              {userInitials(user?.name, user?.email)}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[13px] font-medium text-zinc-100">
+                {workspaceLabel}
+              </p>
+              <p className="truncate text-[11px] text-zinc-500">
+                {user ? planLabel : "Sign in to sync chats"}
+              </p>
+            </div>
           </div>
 
           {/* New Chat */}
@@ -343,7 +338,7 @@ export function Sidebar({
               href="/"
               className={cn(
                 "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] transition-colors",
-                isHome && !pathname.startsWith("/c/")
+                isHome && !isChat && !isProjects && !isChatsPage
                   ? "bg-zinc-800/80 text-zinc-50"
                   : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100",
               )}
@@ -352,38 +347,37 @@ export function Sidebar({
               Home
             </Link>
 
-            <button
-              type="button"
-              onClick={() => {
-                setRecentOpen(true);
-                setSearchOpen(false);
-                setQuery("");
-              }}
+            <Link
+              href="/chats"
               className={cn(
-                "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] transition-colors",
-                pathname.startsWith("/c/")
+                "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] transition-colors",
+                isChatsPage
                   ? "bg-zinc-800/80 text-zinc-50"
                   : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100",
               )}
             >
               <MessagesSquare className="h-4 w-4 shrink-0" />
               Chats
-            </button>
+            </Link>
 
-            <div
-              className="flex cursor-default items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] text-zinc-600"
-              title="Coming soon"
+            <Link
+              href="/projects"
+              className={cn(
+                "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] transition-colors",
+                isProjects
+                  ? "bg-zinc-800/80 text-zinc-50"
+                  : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100",
+              )}
             >
               <LayoutGrid className="h-4 w-4 shrink-0" />
               Projects
-              <span className="ml-auto text-[10px] text-zinc-600">Soon</span>
-            </div>
+            </Link>
           </nav>
 
           {/* Search field */}
           {searchOpen && (
             <div className="mb-2 px-0.5">
-              <div className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 py-2">
+              <div className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-transparent px-2.5 py-2">
                 <Search className="h-3.5 w-3.5 text-zinc-500" />
                 <input
                   ref={searchRef}
@@ -449,64 +443,131 @@ export function Sidebar({
             )}
           </div>
 
-          {/* Promo + profile footer */}
-          <div className="mt-auto space-y-2 pt-2">
-            <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3">
-              <div className="mb-1 flex items-start justify-between gap-2">
-                <p className="text-[13px] font-semibold text-zinc-50">
-                  {billing?.planId === "pro"
-                    ? "You're on Pro"
-                    : billing?.planId === "plus"
-                      ? "You're on Plus"
-                      : "Upgrade your plan"}
-                </p>
-                <Sparkles className="h-4 w-4 shrink-0 text-emerald-400/80" />
-              </div>
-              <p className="mb-3 text-[11px] leading-relaxed text-zinc-500">
-                {billing?.billingExempt
-                  ? "Owner account with unlimited builder credits."
-                  : billing?.planId === "free"
-                    ? "Unlock Luca Turbo, more credits, and deeper thinking."
-                    : "Compare plans or move to Pro for Luca Ultra."}
-              </p>
-              <button
-                type="button"
-                onClick={() => openPlans()}
-                className="inline-flex h-8 items-center rounded-lg border border-zinc-700 px-2.5 text-[12px] font-medium text-zinc-200 transition-colors hover:border-zinc-500 hover:bg-zinc-800 hover:text-white"
-              >
-                {billing?.planId === "pro" ? "View plans" : "Change plan"}
-              </button>
-            </div>
-
+          {/* Account footer */}
+          <div className="relative mt-auto pt-2" ref={accountRef}>
             {authLoading ? (
-              <div className="h-11 rounded-xl bg-zinc-900/50" />
-            ) : user ? (
-              <div className="flex items-center gap-2.5 rounded-xl px-1.5 py-1.5">
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-100 text-[11px] font-bold text-zinc-900">
-                  {userInitials(user.name, user.email)}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[12px] font-medium text-zinc-200">
-                    {user.name}
-                  </p>
-                  <p className="truncate text-[10px] text-zinc-500">
-                    {user.email}
-                  </p>
-                </div>
+              <div className="h-10 overflow-hidden rounded-xl">
+                <ShimmerBlock className="h-full w-full rounded-xl" />
               </div>
+            ) : user ? (
+              <>
+                <div className="flex items-stretch gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAccountOpen((v) => !v)}
+                    className={cn(
+                      "flex min-w-0 flex-1 items-center gap-2.5 rounded-xl bg-zinc-800/70 px-2.5 py-2 text-left transition-colors hover:bg-zinc-800",
+                      accountOpen && "bg-zinc-800",
+                    )}
+                  >
+                    <UserAvatar
+                      size="sm"
+                      name={user.name}
+                      email={user.email}
+                      imageUrl={user.imageUrl}
+                    />
+                    <span className="truncate text-[13px] font-medium text-zinc-100">
+                      {accountHandle(user)}
+                    </span>
+                  </button>
+                  <div
+                    className="flex shrink-0 items-center justify-center rounded-xl border border-zinc-700/70 bg-zinc-900/50 px-3 py-2 text-[13px] font-medium tabular-nums text-zinc-200"
+                    title={creditsBadgeTitle}
+                  >
+                    {billing?.billingExempt ? (
+                      "∞"
+                    ) : billing ? (
+                      billing.creditsRemainingToday.toLocaleString()
+                    ) : (
+                      "—"
+                    )}
+                  </div>
+                </div>
+
+                {accountOpen && (
+                  <div className="absolute bottom-[calc(100%+8px)] left-0 right-0 z-50 overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl">
+                    <div className="flex items-start justify-between gap-3 border-b border-zinc-800/80 bg-zinc-900/40 px-4 py-3.5">
+                      <div className="min-w-0">
+                        <p className="truncate text-[14px] font-semibold text-white">
+                          {accountHandle(user)}
+                        </p>
+                        <p className="truncate text-[12px] text-zinc-500">
+                          {user.email}
+                        </p>
+                      </div>
+                      <UserAvatar
+                        name={user.name}
+                        email={user.email}
+                        imageUrl={user.imageUrl}
+                      />
+                    </div>
+
+                    <div className="py-1">
+                      <div className="flex items-center justify-between px-4 py-2.5 text-[13px]">
+                        <span className="text-zinc-300">Credits today</span>
+                        <span className="font-medium tabular-nums text-zinc-100">
+                          {billing?.billingExempt
+                            ? "Unlimited"
+                            : billing
+                              ? `${billing.creditsRemainingToday.toLocaleString()} / ${billing.dailyCredits.toLocaleString()}`
+                              : "0 / 0"}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between px-4 py-2.5 text-[13px]">
+                        <span className="text-zinc-300">Credits this month</span>
+                        <span className="font-medium tabular-nums text-zinc-100">
+                          {billing?.billingExempt
+                            ? "Unlimited"
+                            : `${billing?.creditsRemaining.toLocaleString() ?? "0"} left`}
+                        </span>
+                      </div>
+
+                      {upgradeLabel && (
+                        <Link
+                          href="/billing"
+                          onClick={() => setAccountOpen(false)}
+                          className="flex w-full items-center justify-between px-4 py-2.5 text-[13px] text-zinc-300 transition-colors hover:bg-zinc-900 hover:text-white"
+                        >
+                          <span className="inline-flex items-center gap-2">
+                            <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
+                            {upgradeLabel}
+                          </span>
+                        </Link>
+                      )}
+
+                      <div className="my-1 border-t border-zinc-800/80" />
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAccountOpen(false);
+                          void logout().then(() => {
+                            setChats([]);
+                            router.push("/");
+                          });
+                        }}
+                        className="flex w-full items-center justify-between px-4 py-2.5 text-[13px] text-zinc-300 transition-colors hover:bg-zinc-900 hover:text-white"
+                      >
+                        <span>Sign out</span>
+                        <LogOut className="h-4 w-4 text-zinc-500" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
             ) : (
               <div className="flex gap-2">
                 <button
                   type="button"
                   onClick={() => openAuth("login")}
-                  className="flex h-9 flex-1 items-center justify-center rounded-lg border border-zinc-800 text-[12px] text-zinc-300 transition-colors hover:bg-zinc-900 hover:text-white"
+                  className="flex h-10 flex-1 items-center justify-center rounded-xl bg-zinc-800/70 text-[13px] text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white"
                 >
                   Sign in
                 </button>
                 <button
                   type="button"
                   onClick={() => openAuth("signup")}
-                  className="flex h-9 flex-1 items-center justify-center rounded-lg bg-zinc-100 text-[12px] font-medium text-zinc-950 transition-colors hover:bg-white"
+                  className="flex h-10 flex-1 items-center justify-center rounded-xl bg-emerald-600 text-[13px] font-medium text-white transition-colors hover:bg-emerald-500"
                 >
                   Sign up
                 </button>

@@ -47,7 +47,12 @@ export async function getPasswordResetsCollection(): Promise<
 }
 
 export function toPublicUser(user: UserDoc): PublicUser {
-  return { id: user._id, email: user.email, name: user.name };
+  return {
+    id: user._id,
+    email: user.email,
+    name: user.name,
+    ...(user.imageUrl ? { imageUrl: user.imageUrl } : {}),
+  };
 }
 
 export async function findUserByEmail(

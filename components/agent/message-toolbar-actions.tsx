@@ -1,13 +1,15 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   MessageAction,
   MessageActions,
 } from "@/components/ai-elements/message";
 import {
+  CheckIcon,
   CopyIcon,
   RefreshCcwIcon,
+  ShareIcon,
   ThumbsDownIcon,
   ThumbsUpIcon,
 } from "lucide-react";
@@ -21,23 +23,51 @@ export function MessageToolbarActions({
 }) {
   const [liked, setLiked] = useState(false);
   const [disliked, setDisliked] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    };
+  }, []);
 
   const handleCopy = useCallback(() => {
     if (!content.trim()) return;
+    void navigator.clipboard.writeText(content).then(() => {
+      setCopied(true);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = setTimeout(() => setCopied(false), 1000);
+    });
+  }, [content]);
+
+  const handleShare = useCallback(async () => {
+    if (!content.trim()) return;
+    if (typeof navigator.share === "function") {
+      try {
+        await navigator.share({ text: content });
+      } catch {
+        /* user dismissed */
+      }
+      return;
+    }
     void navigator.clipboard.writeText(content);
   }, [content]);
 
   return (
-    <MessageActions className="mt-2 opacity-80 transition-opacity group-hover:opacity-100">
-      {onRetry ? (
-        <MessageAction
-          label="Retry"
-          tooltip="Regenerate response"
-          onClick={onRetry}
-        >
-          <RefreshCcwIcon className="size-4" />
-        </MessageAction>
-      ) : null}
+    <MessageActions className="mt-1">
+      <MessageAction
+        label={copied ? "Copied" : "Copy"}
+        tooltip={copied ? "Copied!" : "Copy to clipboard"}
+        onClick={handleCopy}
+        disabled={!content.trim()}
+      >
+        {copied ? (
+          <CheckIcon className="size-4 stroke-[1.5] text-message-action-icon-hover" />
+        ) : (
+          <CopyIcon className="size-4 stroke-[1.5]" />
+        )}
+      </MessageAction>
       <MessageAction
         label="Like"
         tooltip="Like this response"
@@ -47,7 +77,7 @@ export function MessageToolbarActions({
         }}
       >
         <ThumbsUpIcon
-          className="size-4"
+          className="size-4 stroke-[1.5]"
           fill={liked ? "currentColor" : "none"}
         />
       </MessageAction>
@@ -60,18 +90,27 @@ export function MessageToolbarActions({
         }}
       >
         <ThumbsDownIcon
-          className="size-4"
+          className="size-4 stroke-[1.5]"
           fill={disliked ? "currentColor" : "none"}
         />
       </MessageAction>
       <MessageAction
-        label="Copy"
-        tooltip="Copy to clipboard"
-        onClick={handleCopy}
+        label="Share"
+        tooltip="Share response"
+        onClick={() => void handleShare()}
         disabled={!content.trim()}
       >
-        <CopyIcon className="size-4" />
+        <ShareIcon className="size-4 stroke-[1.5]" />
       </MessageAction>
+      {onRetry ? (
+        <MessageAction
+          label="Retry"
+          tooltip="Regenerate response"
+          onClick={onRetry}
+        >
+          <RefreshCcwIcon className="size-4 stroke-[1.5]" />
+        </MessageAction>
+      ) : null}
     </MessageActions>
   );
 }

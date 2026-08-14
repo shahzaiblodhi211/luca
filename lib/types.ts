@@ -179,6 +179,10 @@ export type ChatDoc = {
   lucaModelTier?: string;
   /** Gemini thinking level for this chat (MINIMAL | LOW | MEDIUM | HIGH). */
   thinkingLevel?: string;
+  /** How many times Luca AI renamed the chat title (max 2). */
+  titleAiUpdates?: number;
+  /** First user message was only a greeting — allow one intent rename. */
+  firstPromptGreeting?: boolean;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -186,6 +190,19 @@ export type ChatDoc = {
 export type ChatSummary = {
   id: string;
   title: string;
+  updatedAt: string;
+  createdAt: string;
+  projectId?: string | null;
+  /** Chat has generated code (files or project id). */
+  hasProject?: boolean;
+};
+
+/** Code project built in a chat (has generated files or a project id). */
+export type ProjectSummary = {
+  id: string;
+  title: string;
+  projectId: string | null;
+  fileCount: number;
   updatedAt: string;
   createdAt: string;
 };

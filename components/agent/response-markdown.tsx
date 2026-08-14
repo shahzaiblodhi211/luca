@@ -3,6 +3,9 @@
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 
+export const ASSISTANT_MARKDOWN_CLASS =
+  "markdown prose dark:prose-invert wrap-break-word w-full max-w-none dark markdown-new-styling font-normal tracking-normal";
+
 /**
  * Assistant markdown via AI Elements MessageResponse (Streamdown).
  */
@@ -23,28 +26,21 @@ export function ResponseMarkdown({
   }
 
   return (
-    <MessageResponse
-      className={cn(
-        "size-full text-[15px] leading-relaxed text-foreground",
-        "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-        "[&_h1]:mb-2 [&_h1]:mt-4 [&_h1]:text-xl [&_h1]:font-semibold",
-        "[&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-lg [&_h2]:font-semibold",
-        "[&_h3]:mb-1.5 [&_h3]:mt-3 [&_h3]:text-base [&_h3]:font-semibold",
-        "[&_p]:my-2 [&_ul]:my-2 [&_ol]:my-2 [&_li]:my-0.5",
-        "[&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5",
-        "[&_strong]:font-semibold [&_a]:text-sky-400 [&_a]:underline",
-        "[&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[0.9em]",
-        "[&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-border [&_pre]:bg-muted/50 [&_pre]:p-3",
-        "[&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground",
-        className,
-      )}
-      parseIncompleteMarkdown={isStreaming}
-      mode={isStreaming ? "streaming" : "static"}
-      isAnimating={false}
-      animated={false}
-      controls={false}
-    >
-      {text}
-    </MessageResponse>
+    <div className={cn(ASSISTANT_MARKDOWN_CLASS, className)}>
+      <MessageResponse
+        className={cn(
+          "size-full font-[inherit] text-[inherit] leading-[inherit] tracking-[inherit]",
+          "[&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+          "[&_li>p]:my-0 [&_li>p:first-child]:mt-0 [&_li>p:last-child]:mb-0",
+        )}
+        parseIncompleteMarkdown={isStreaming}
+        mode={isStreaming ? "streaming" : "static"}
+        isAnimating={false}
+        animated={false}
+        controls={false}
+      >
+        {text}
+      </MessageResponse>
+    </div>
   );
 }

@@ -21,19 +21,23 @@ import {
   MessageContent,
 } from "@/components/ai-elements/message";
 import { CodePreview } from "@/components/preview/code-preview";
-import { streamChatAction } from "@/app/actions/chat";
+import { PreviewBuildingPlaceholder } from "@/components/preview/preview-building-placeholder";
+import { streamChatAction, cancelChatGenerationAction } from "@/app/actions/chat";
 import { saveProjectEnvAction } from "@/app/actions/env";
 import { readStreamableValue } from "@ai-sdk/rsc";
 import type { AgentStreamEvent } from "@/lib/agent/events";
 import { mergeProjectFiles } from "@/lib/project-files";
 import type { ThinkingLevel } from "@/lib/thinking-level";
 import {
-  parseLucaModelTier,
-  readStoredLucaModelTier,
   resolveLucaModelTier,
+  resolveLucaModelTierForUi,
+  lucaModelTierFromChatRecord,
+  parseLucaModelTier,
+  storeLucaModelTier,
   type LucaModelTier,
 } from "@/lib/luca-model-tier";
 import { useAuthModal } from "@/components/auth/auth-context";
+import { useAuthToast } from "@/components/auth/auth-toast";
 import type { PlanId } from "@/lib/billing/plans";
 import { thinkingLevelForPlan } from "@/lib/billing/plans";
 import type {
@@ -44,7 +48,7 @@ import type {
   ProjectFile,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { ChevronDown, PanelRight } from "lucide-react";
+import { PanelRight } from "lucide-react";
 import { PanelResizer } from "./panel-resizer";
 import {
   CHAT_PANEL_MAX,
@@ -448,14 +452,19 @@ export function ChatWorkspace({
   initialLucaModelTier,
   autoStart,
 }: Props) {
-  const { billing } = useAuthModal();
+  const { billing, setBilling, refreshUser } = useAuthModal();
+  const { showToast } = useAuthToast();
   const planId = (billing?.planId ?? "free") as PlanId;
   const thinkingLevel = useMemo(
     () => thinkingLevelForPlan(planId),
     [planId],
   );
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
+  const [title, setTitle] = useState(chatTitle ?? "New chat");
   const [files, setFiles] = useState<ProjectFile[]>(initialFiles);
+  useEffect(() => {
+    if (chatTitle) setTitle(chatTitle);
+  }, [chatTitle]);
   const [projectId, setProjectId] = useState<string | null>(initialProjectId);
   const [imageDataUrls, setImageDataUrls] =
     useState<Record<string, string>>(initialImageDataUrls);
@@ -467,12 +476,9 @@ export function ChatWorkspace({
   const openEnvModal = useCallback((part: EnvRequestPart) => {
     setEnvModal(part);
   }, []);
-  const [lucaModelTier, setLucaModelTier] = useState<LucaModelTier>(() => {
-    const parsed = parseLucaModelTier(initialLucaModelTier);
-    return parsed
-      ? resolveLucaModelTier(planId, parsed)
-      : readStoredLucaModelTier(planId);
-  });
+  const [lucaModelTier, setLucaModelTier] = useState<LucaModelTier>(() =>
+    lucaModelTierFromChatRecord(initialLucaModelTier, planId),
+  );
   const [live, setLive] = useState<LiveState | null>(null);
   const [busy, setBusy] = useState(false);
   const [queue, setQueue] = useState<QueuedPrompt[]>([]);
@@ -480,7 +486,9 @@ export function ChatWorkspace({
   const [mobilePreview, setMobilePreview] = useState(false);
   const startedRef = useRef(false);
   const liveRef = useRef<LiveState | null>(null);
-  const lucaModelTierRef = useRef(lucaModelTier);
+  const lucaModelTierRef = useRef(
+    lucaModelTierFromChatRecord(initialLucaModelTier, planId),
+  );
   const busyRef = useRef(false);
   const queueRef = useRef<QueuedPrompt[]>([]);
   const runGenerationRef = useRef<
@@ -492,6 +500,7 @@ export function ChatWorkspace({
       lucaModelTier?: LucaModelTier;
     }) => Promise<void>) | null
   >(null);
+  const stoppedTurnRef = useRef(false);
   const router = useRouter();
   const { openPlans } = usePlansModal();
   const { setPreviewOpen } = useShell();
@@ -510,11 +519,33 @@ export function ChatWorkspace({
     lucaModelTierRef.current = lucaModelTier;
   }, [lucaModelTier]);
 
-  useEffect(() => {
-    setLucaModelTier((prev) => resolveLucaModelTier(planId, prev));
-  }, [planId]);
+  const handleLucaModelTierChange = useCallback((tier: LucaModelTier) => {
+    setLucaModelTier(tier);
+    lucaModelTierRef.current = tier;
+    storeLucaModelTier(tier);
+  }, []);
 
-  const hasPreview = files.length > 0 || showPreview;
+  useEffect(() => {
+    setLucaModelTier((prev) =>
+      resolveLucaModelTierForUi(planId, {
+        chatTier: initialLucaModelTier,
+        current: prev,
+      }),
+    );
+  }, [planId, initialLucaModelTier]);
+
+  useEffect(() => {
+    const fromChat = parseLucaModelTier(initialLucaModelTier);
+    if (fromChat) {
+      lucaModelTierRef.current = fromChat;
+    }
+  }, [initialLucaModelTier]);
+
+  const previewWarm = files.length > 0;
+  /** Split layout while building or after reveal — placeholder until the turn ends. */
+  const previewPanelOpen = previewWarm && (busy || showPreview);
+  /** Live iframe — only after Luca finishes (preview already warmed in background). */
+  const previewLive = showPreview;
 
   const handlePreviewReady = useCallback(() => {
     setMessages((prev) => {
@@ -555,6 +586,7 @@ export function ChatWorkspace({
         projectId: string | null;
         packages?: Record<string, string>;
         imageDataUrls?: Record<string, string>;
+        lucaModelTier?: string | null;
       };
     };
     setMessages((prev) => {
@@ -634,12 +666,29 @@ export function ChatWorkspace({
       ...prev,
     }));
     if ((data.chat.files ?? []).length) setShowPreview(true);
-  }, [chatId]);
+    if (data.chat.lucaModelTier) {
+      const next = resolveLucaModelTier(planId, data.chat.lucaModelTier);
+      setLucaModelTier(next);
+      lucaModelTierRef.current = next;
+    }
+  }, [chatId, planId]);
 
   useEffect(() => {
-    setPreviewOpen(hasPreview);
+    setPreviewOpen(previewPanelOpen);
     return () => setPreviewOpen(false);
-  }, [hasPreview, setPreviewOpen]);
+  }, [previewPanelOpen, setPreviewOpen]);
+
+  /** Reveal preview once the turn finishes if files were written during the stream. */
+  useEffect(() => {
+    if (!busy && previewWarm && !showPreview) {
+      setShowPreview(true);
+    }
+  }, [busy, previewWarm, showPreview]);
+
+  const stopGeneration = useCallback(() => {
+    stoppedTurnRef.current = true;
+    void cancelChatGenerationAction(chatId);
+  }, [chatId]);
 
   const runGeneration = useCallback(
     async (opts: {
@@ -651,6 +700,7 @@ export function ChatWorkspace({
     }) => {
       setBusy(true);
       setLiveState(emptyLive());
+      stoppedTurnRef.current = false;
 
       if (opts.lucaModelTier) {
         setLucaModelTier(opts.lucaModelTier);
@@ -697,6 +747,10 @@ export function ChatWorkspace({
           // RSC keep-alive — ignore (avoids "streamable value slow to update")
           if (event.type === "ping") continue;
 
+          if (event.type === "billing") {
+            setBilling(event.billing);
+            continue;
+          }
           if (event.type === "error") {
             throw new Error(event.message);
           }
@@ -726,7 +780,6 @@ export function ChatWorkspace({
             typeof event.code === "string"
           ) {
             const code = event.code;
-            setShowPreview(true);
             setFiles((prev) =>
               mergeProjectFiles(prev, [
                 {
@@ -780,6 +833,15 @@ export function ChatWorkspace({
             // Open modal as soon as Luca asks for secrets
             setEnvModal(part);
           }
+          if (event.type === "chat_title") {
+            setTitle(event.title);
+            window.dispatchEvent(
+              new CustomEvent("luca-chat-title", {
+                detail: { id: chatId, title: event.title },
+              }),
+            );
+            continue;
+          }
           if (event.type === "project") {
             setProjectId(event.id);
           }
@@ -810,40 +872,52 @@ export function ChatWorkspace({
         // Commit streamed assistant message, clear live+busy BEFORE refreshChat.
         // Previously: setLive(null) while busy stayed true during await refreshChat()
         // → empty AssistantMessage with isStreaming → stuck "Thinking..." under the reply.
-        const snapshot = liveRef.current;
-        if (snapshot?.parts.length) {
-          const sealed = stripEmptyThinking(sealStreamParts(snapshot.parts));
-          const textBits = sealed
-            .filter(
-              (p): p is Extract<AssistantPart, { type: "text" }> =>
-                p.type === "text",
-            )
-            .map((p) => p.text);
-          const summaryBits = sealed
-            .filter(
-              (p): p is Extract<AssistantPart, { type: "summary" }> =>
-                p.type === "summary",
-            )
-            .flatMap((p) => p.lines);
-          const content = [...textBits, ...summaryBits]
-            .filter((t) => t.trim())
-            .join("\n\n");
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `assistant-${Date.now()}`,
-              role: "assistant",
-              content,
-              parts: sealed,
-              createdAt: new Date(),
-            },
-          ]);
+        const wasStopped = stoppedTurnRef.current;
+        if (!wasStopped) {
+          const snapshot = liveRef.current;
+          if (snapshot?.parts.length) {
+            const sealed = stripEmptyThinking(sealStreamParts(snapshot.parts));
+            const textBits = sealed
+              .filter(
+                (p): p is Extract<AssistantPart, { type: "text" }> =>
+                  p.type === "text",
+              )
+              .map((p) => p.text);
+            const summaryBits = sealed
+              .filter(
+                (p): p is Extract<AssistantPart, { type: "summary" }> =>
+                  p.type === "summary",
+              )
+              .flatMap((p) => p.lines);
+            const content = [...textBits, ...summaryBits]
+              .filter((t) => t.trim())
+              .join("\n\n");
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `assistant-${Date.now()}`,
+                role: "assistant",
+                content,
+                parts: sealed,
+                createdAt: new Date(),
+              },
+            ]);
+          }
+          setLiveState(null);
+          setBusy(false);
+          void refreshChat();
+        } else {
+          setLiveState(null);
+          setBusy(false);
+          await refreshChat();
         }
-        setLiveState(null);
-        setBusy(false);
-        // Sync from server in the background — don't block the composer
-        void refreshChat();
       } catch (err) {
+        if (stoppedTurnRef.current) {
+          setLiveState(null);
+          setBusy(false);
+          await refreshChat();
+          return;
+        }
         const raw = err instanceof Error ? err.message : "Generation failed";
         const msg =
           /\b429\b|resource_exhausted|quota|too many requests|at capacity|busy right now/i.test(
@@ -867,24 +941,27 @@ export function ChatWorkspace({
         setBusy(false);
         if (/credit|daily limit|upgrade your plan/i.test(msg)) {
           openPlans();
+          void refreshUser();
         }
       } finally {
         setBusy(false);
         setLiveState(null);
-        // Drain next queued prompt after this turn finishes
-        const next = queueRef.current[0];
-        if (next) {
-          setQueue((prev) => prev.slice(1));
-          void runGenerationRef.current?.({
-            message: next.text,
-            attachments: next.attachments,
-            thinkingLevel: next.thinkingLevel,
-            lucaModelTier: next.lucaModelTier,
-          });
+        if (!stoppedTurnRef.current) {
+          const next = queueRef.current[0];
+          if (next) {
+            setQueue((prev) => prev.slice(1));
+            void runGenerationRef.current?.({
+              message: next.text,
+              attachments: next.attachments,
+              thinkingLevel: next.thinkingLevel,
+              lucaModelTier: next.lucaModelTier,
+            });
+          }
         }
+        stoppedTurnRef.current = false;
       }
     },
-    [chatId, refreshChat, setLiveState, patchLive, openPlans, thinkingLevel],
+    [chatId, refreshChat, setLiveState, patchLive, openPlans, thinkingLevel, setBilling, refreshUser],
   );
 
   useEffect(() => {
@@ -898,12 +975,16 @@ export function ChatWorkspace({
     if (!onlyUser) return;
     startedRef.current = true;
     router.replace(`/c/${chatId}`);
+    const bootTier =
+      parseLucaModelTier(initialLucaModelTier) ?? lucaModelTierRef.current;
+    lucaModelTierRef.current = bootTier;
+    setLucaModelTier(bootTier);
     void runGeneration({
       isFirst: true,
       message: initialMessages[0].content,
-      lucaModelTier: lucaModelTierRef.current,
+      lucaModelTier: bootTier,
     });
-  }, [autoStart, chatId, initialMessages, router, runGeneration]);
+  }, [autoStart, chatId, initialLucaModelTier, initialMessages, router, runGeneration]);
 
   const enqueuePrompt = useCallback((item: Omit<QueuedPrompt, "id">) => {
     setQueue((prev) => [
@@ -1020,7 +1101,10 @@ export function ChatWorkspace({
         setEnvModal(null);
       } catch (err) {
         console.error(err);
-        alert(err instanceof Error ? err.message : "Failed to save env");
+        showToast({
+          type: "error",
+          message: err instanceof Error ? err.message : "Failed to save env",
+        });
       } finally {
         setEnvSaving(false);
       }
@@ -1032,23 +1116,11 @@ export function ChatWorkspace({
 
   const chatColumn = (
     <>
-      {chatTitle ? (
-        <div className="flex h-11 shrink-0 items-center border-b border-zinc-800 px-4 lg:px-3">
-          <button
-            type="button"
-            className="flex min-w-0 max-w-full items-center gap-1 truncate text-left text-sm font-medium text-zinc-200"
-            title={chatTitle}
-          >
-            <span className="truncate">{chatTitle}</span>
-            <ChevronDown className="h-4 w-4 shrink-0 text-zinc-500" />
-          </button>
-        </div>
-      ) : null}
       <Conversation className="relative min-h-0 flex-1">
         <ConversationContent
           className={cn(
             "mx-auto sm:px-4",
-            hasPreview ? "max-w-none px-3" : "max-w-3xl",
+            previewPanelOpen ? "max-w-none px-3" : "max-w-3xl",
           )}
         >
           {displayMessages.map((m) => (
@@ -1098,21 +1170,21 @@ export function ChatWorkspace({
         <ConversationScrollButton />
       </Conversation>
 
-      <div className="bg-zinc-950/80 px-3 py-3 sm:px-4">
+      <div className="bg-background px-3 pb-2.5 pt-3 sm:px-4">
         <div
           className={cn(
             "mx-auto space-y-2",
-            hasPreview ? "max-w-none" : "max-w-3xl",
+            previewPanelOpen ? "max-w-none" : "max-w-3xl",
           )}
         >
-          {hasPreview && (
+          {previewPanelOpen && (
             <button
               type="button"
               onClick={() => setMobilePreview(true)}
               className="inline-flex items-center gap-2 rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-300 lg:hidden"
             >
               <PanelRight className="h-3.5 w-3.5" />
-              Open preview
+              {previewLive ? "Open preview" : "Preview preparing…"}
             </button>
           )}
           <MessageQueue
@@ -1122,11 +1194,11 @@ export function ChatWorkspace({
           />
           <PromptForm
             compact
-            initialLucaModelTier={lucaModelTier}
-            contextMessages={messages.map((m) => ({
-              role: m.role,
-              content: m.content,
-            }))}
+            showDisclaimer
+            streaming={busy}
+            onStop={stopGeneration}
+            lucaModelTier={lucaModelTier}
+            onLucaModelTierChange={handleLucaModelTierChange}
             placeholder={
               busy ? "Add to queue while Luca is working…" : undefined
             }
@@ -1157,16 +1229,16 @@ export function ChatWorkspace({
   );
 
   return (
-    <div className="flex min-h-0 flex-1">
+    <div className="flex h-full min-h-0 flex-1 overflow-hidden">
       <section
         className={cn(
           "flex min-h-0 min-w-0 flex-col",
-          hasPreview
+          previewPanelOpen
             ? "w-full shrink-0 lg:w-[var(--chat-panel-w)] lg:border-r lg:border-zinc-800/60"
             : "w-full flex-1",
         )}
         style={
-          hasPreview
+          previewPanelOpen
             ? ({
                 "--chat-panel-w": `${chatPanelWidth}px`,
               } as React.CSSProperties)
@@ -1176,7 +1248,7 @@ export function ChatWorkspace({
         {chatColumn}
       </section>
 
-      {hasPreview && (
+      {previewPanelOpen && (
         <>
           <PanelResizer
             onResize={setChatPanelWidth}
@@ -1185,22 +1257,35 @@ export function ChatWorkspace({
             max={CHAT_PANEL_MAX}
             className="hidden lg:block"
           />
-          <section className="hidden min-h-0 min-w-0 flex-1 flex-col lg:flex">
-            <CodePreview
-              files={files}
-              projectId={projectId}
-              chatId={chatId}
-              imageDataUrls={imageDataUrls}
-              packages={packages}
-              streaming={busy}
-              onFilesChange={setFiles}
-              onPreviewReady={handlePreviewReady}
-            />
+          <section className="relative hidden h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:flex">
+            {!previewLive ? (
+              <PreviewBuildingPlaceholder />
+            ) : null}
+            <div
+              className={cn(
+                "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+                !previewLive &&
+                  "pointer-events-none absolute inset-0 opacity-0",
+              )}
+              aria-hidden={!previewLive}
+            >
+              <CodePreview
+                files={files}
+                projectId={projectId}
+                chatId={chatId}
+                imageDataUrls={imageDataUrls}
+                packages={packages}
+                streaming={busy}
+                revealed={previewLive}
+                onFilesChange={setFiles}
+                onPreviewReady={handlePreviewReady}
+              />
+            </div>
           </section>
         </>
       )}
 
-      {mobilePreview && hasPreview && (
+      {mobilePreview && previewPanelOpen && (
         <div className="fixed inset-0 z-50 flex flex-col bg-zinc-950 lg:hidden">
           <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
             <span className="text-sm font-medium">Preview</span>
@@ -1212,16 +1297,22 @@ export function ChatWorkspace({
               Close
             </button>
           </div>
-          <div className="min-h-0 flex-1">
-            <CodePreview
-              files={files}
-              projectId={projectId}
-              chatId={chatId}
-              imageDataUrls={imageDataUrls}
-              packages={packages}
-              streaming={busy}
-              onFilesChange={setFiles}
-            />
+          <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+            {previewLive ? (
+              <CodePreview
+                files={files}
+                projectId={projectId}
+                chatId={chatId}
+                imageDataUrls={imageDataUrls}
+                packages={packages}
+                streaming={busy}
+                revealed
+                onFilesChange={setFiles}
+                onPreviewReady={handlePreviewReady}
+              />
+            ) : (
+              <PreviewBuildingPlaceholder />
+            )}
           </div>
         </div>
       )}

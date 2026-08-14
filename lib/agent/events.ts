@@ -7,6 +7,7 @@ import type {
   ChatAttachment,
   ProjectFile,
 } from "@/lib/types";
+import type { PublicBilling } from "@/lib/billing/types";
 
 export type AgentStreamEvent =
   /** Open a thinking shell; reasoning streams via thinking_delta. */
@@ -113,7 +114,9 @@ export type AgentStreamEvent =
       packages?: Record<string, string>;
     }
   | { type: "error"; message: string }
-  | { type: "ping"; t: number };
+  | { type: "ping"; t: number }
+  | { type: "billing"; billing: PublicBilling }
+  | { type: "chat_title"; title: string };
 
 export type { AssistantPart };
 

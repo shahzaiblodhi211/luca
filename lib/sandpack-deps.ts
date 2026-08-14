@@ -75,7 +75,8 @@ const KNOWN_VERSIONS: Record<string, string> = {
   zustand: "5.0.2",
 };
 
-const ALWAYS: Record<string, string> = {
+/** Preinstalled in every preview — agent must import directly, not install_package. */
+export const PREINSTALLED_PACKAGES: Record<string, string> = {
   "lucide-react": KNOWN_VERSIONS["lucide-react"],
   clsx: KNOWN_VERSIONS.clsx,
   "tailwind-merge": KNOWN_VERSIONS["tailwind-merge"],
@@ -84,7 +85,16 @@ const ALWAYS: Record<string, string> = {
   recharts: KNOWN_VERSIONS.recharts,
   "framer-motion": KNOWN_VERSIONS["framer-motion"],
   "date-fns": KNOWN_VERSIONS["date-fns"],
+  sonner: KNOWN_VERSIONS.sonner,
+  zod: KNOWN_VERSIONS.zod,
+  zustand: KNOWN_VERSIONS.zustand,
+  "react-hook-form": KNOWN_VERSIONS["react-hook-form"],
+  "@hookform/resolvers": KNOWN_VERSIONS["@hookform/resolvers"],
+  cmdk: KNOWN_VERSIONS.cmdk,
+  "tailwindcss-animate": KNOWN_VERSIONS["tailwindcss-animate"],
 };
+
+const ALWAYS: Record<string, string> = PREINSTALLED_PACKAGES;
 
 const IMPORT_RE =
   /(?:import|export)\s+(?:type\s+)?(?:[\s\S]*?\s+from\s+)?["']([^"']+)["']/g;
@@ -174,6 +184,10 @@ export function resolvePackageVersion(
 
 export function isKnownPackage(name: string): boolean {
   return Boolean(KNOWN_VERSIONS[name]);
+}
+
+export function isPreinstalledPackage(name: string): boolean {
+  return name in PREINSTALLED_PACKAGES;
 }
 
 export function resolveSandpackDependencies(

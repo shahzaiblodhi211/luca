@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUp, Loader2, Mic, Plus } from "lucide-react";
+import { ArrowUp, Loader2, Mic, Plus, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   Attachment,
@@ -8,7 +8,7 @@ import {
   AttachmentRemove,
   Attachments,
 } from "@/components/ai-elements/attachments";
-import { Loader } from "@/components/ai-elements/loader";
+import { ShimmerBlock } from "@/components/ui/shimmer-block";
 import type { ThinkingLevel } from "@/lib/thinking-level";
 import { cn } from "@/lib/utils";
 import type { ChatAttachment } from "@/lib/types";
@@ -20,6 +20,7 @@ import {
 import { LucaModelPicker } from "./luca-model-picker";
 import { ComposerContextUsage } from "./composer-context-usage";
 import { useAuthModal } from "@/components/auth/auth-context";
+import { useAuthToast } from "@/components/auth/auth-toast";
 import { usePlansModal } from "@/components/billing/plans-modal";
 import type { PlanId } from "@/lib/billing/plans";
 import { thinkingLevelForPlan } from "@/lib/billing/plans";
@@ -74,21 +75,33 @@ export function PromptForm({
   placeholder = "Ask Luca to build…",
   autoFocus,
   compact,
+  lucaModelTier: lucaModelTierProp,
+  onLucaModelTierChange,
   initialLucaModelTier,
-  contextMessages,
   animatedBuildPlaceholder,
+  streaming,
+  onStop,
+  showDisclaimer,
 }: {
   onSubmit: (payload: PromptSubmitPayload) => void | Promise<void>;
   disabled?: boolean;
   placeholder?: string;
   autoFocus?: boolean;
   compact?: boolean;
+  /** Controlled builder model (chat page). */
+  lucaModelTier?: LucaModelTier;
+  onLucaModelTierChange?: (tier: LucaModelTier) => void;
+  /** Initial tier when uncontrolled (home page). */
   initialLucaModelTier?: string | null;
-  /** Chat history for context window estimate (chat page). */
-  contextMessages?: Array<{ role: string; content?: string }>;
   animatedBuildPlaceholder?: boolean;
+  /** Luca is generating — show stop control. */
+  streaming?: boolean;
+  onStop?: () => void;
+  /** Footer disclaimer under composer (chat page). */
+  showDisclaimer?: boolean;
 }) {
   const { billing } = useAuthModal();
+  const { showToast } = useAuthToast();
   const { openPlans } = usePlansModal();
   const planId = (billing?.planId ?? "free") as PlanId;
 
@@ -97,11 +110,25 @@ export function PromptForm({
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [inputFocused, setInputFocused] = useState(false);
-  const [lucaModelTier, setLucaModelTier] = useState<LucaModelTier>(() => {
+  const controlled = lucaModelTierProp !== undefined;
+
+  const [internalTier, setInternalTier] = useState<LucaModelTier>(() => {
     const parsed = parseLucaModelTier(initialLucaModelTier);
     if (parsed) return resolveLucaModelTier(planId, parsed);
     return readStoredLucaModelTier(planId);
   });
+
+  const lucaModelTier = controlled ? lucaModelTierProp! : internalTier;
+
+  const setLucaModelTier = (tier: LucaModelTier) => {
+    const resolved = resolveLucaModelTier(planId, tier);
+    storeLucaModelTier(resolved);
+    if (controlled) {
+      onLucaModelTierChange?.(resolved);
+    } else {
+      setInternalTier(resolved);
+    }
+  };
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [liveModelId, setLiveModelId] = useState(DEFAULT_LIVE_VOICE_MODEL_ID);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -117,7 +144,8 @@ export function PromptForm({
     modelId: liveModelId,
     getBaseText: () => valueRef.current,
     onText: setValue,
-    onError: (message) => alert(message),
+    onError: (message) =>
+      showToast({ type: "error", message }),
   });
 
   useEffect(() => {
@@ -129,14 +157,11 @@ export function PromptForm({
   }, []);
 
   useEffect(() => {
-    setLucaModelTier((prev) => resolveLucaModelTier(planId, prev));
-  }, [planId]);
-
-  useEffect(() => {
-    if (!initialLucaModelTier) return;
-    const parsed = parseLucaModelTier(initialLucaModelTier);
-    if (parsed) setLucaModelTier(resolveLucaModelTier(planId, parsed));
-  }, [initialLucaModelTier, planId]);
+    if (controlled) return;
+    setInternalTier((prev) =>
+      resolveLucaModelTier(planId, readStoredLucaModelTier(planId) || prev),
+    );
+  }, [planId, controlled]);
 
   useEffect(() => {
     const el = ref.current;
@@ -232,7 +257,10 @@ export function PromptForm({
     if ((!trimmed && !files.length) || disabled || pending) return;
     if (files.some((f) => f.status === "uploading")) return;
     if (files.some((f) => f.status === "error")) {
-      alert("Remove failed uploads before sending");
+      showToast({
+        type: "error",
+        message: "Remove failed uploads before sending",
+      });
       return;
     }
 
@@ -255,7 +283,10 @@ export function PromptForm({
       await submitPromise;
     } catch (err) {
       setPending(false);
-      alert(err instanceof Error ? err.message : "Failed to send");
+      showToast({
+        type: "error",
+        message: err instanceof Error ? err.message : "Failed to send",
+      });
     }
   }
 
@@ -278,13 +309,13 @@ export function PromptForm({
     !pending;
 
   return (
-    <>
+    <div className="w-full">
       <div
         className={cn(
-          "relative w-full overflow-visible rounded-[22px] border bg-[#141414] shadow-[0_12px_40px_-18px_rgba(0,0,0,0.7)] transition-colors duration-150",
+          "relative w-full overflow-visible rounded-[22px] border bg-composer-bg shadow-[0_12px_40px_-18px_rgba(0,0,0,0.85)] transition-colors duration-150",
           inputFocused || dragOver
-            ? "border-emerald-700 bg-[#161616]"
-            : "border-zinc-800",
+            ? "border-composer-border-focus"
+            : "border-composer-border",
           compact ? "px-3 pb-2 pt-2.5" : "px-3.5 pb-2.5 pt-3",
         )}
         onDragEnter={(e) => {
@@ -331,8 +362,8 @@ export function PromptForm({
                   <AttachmentRemove />
                 ) : null}
                 {item.status === "uploading" ? (
-                  <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/50">
-                    <Loader size={20} />
+                  <div className="absolute inset-0 z-10 overflow-hidden rounded-[inherit]">
+                    <ShimmerBlock className="h-full w-full opacity-80" />
                   </div>
                 ) : null}
               </Attachment>
@@ -345,7 +376,7 @@ export function PromptForm({
             <AnimatedBuildPlaceholder
               active
               className={cn(
-                "pointer-events-none absolute left-0.5 top-0 block text-left text-[15px] leading-snug text-zinc-500",
+                "pointer-events-none absolute left-0.5 top-0 block text-left text-[15px] leading-snug text-composer-muted",
                 compact ? "min-h-[28px] py-0" : "min-h-[36px] py-0",
               )}
             />
@@ -373,10 +404,10 @@ export function PromptForm({
               }
             }}
             className={cn(
-              "relative w-full resize-none bg-transparent text-left text-[15px] leading-snug text-zinc-100 outline-none",
+              "relative w-full resize-none bg-transparent text-left text-[15px] leading-snug text-composer-fg outline-none",
               animatedBuildPlaceholder
                 ? "placeholder:text-transparent"
-                : "placeholder:text-zinc-500",
+                : "placeholder:text-composer-muted",
               compact ? "min-h-[28px] px-0.5" : "min-h-[36px] px-0.5",
             )}
           />
@@ -394,7 +425,7 @@ export function PromptForm({
           />
         ) : (
           <div className="mt-1.5 flex items-center justify-between gap-2 overflow-visible">
-            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-0.5 overflow-visible">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 overflow-visible">
               <input
                 ref={fileRef}
                 type="file"
@@ -410,11 +441,11 @@ export function PromptForm({
                 type="button"
                 disabled={disabled || pending || pendingFiles.length >= 6}
                 onClick={() => fileRef.current?.click()}
-                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-40"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-composer-icon transition-colors hover:bg-composer-icon-hover-bg hover:text-composer-icon-hover disabled:opacity-40"
                 title="Add files"
                 aria-label="Add files"
               >
-                <Plus className="h-4 w-4" strokeWidth={1.75} />
+                <Plus className="h-5 w-5" strokeWidth={1.75} />
               </button>
               <LucaModelPicker
                 compact={compact}
@@ -423,13 +454,10 @@ export function PromptForm({
                 disabled={disabled || pending || voice.recording}
                 onChange={(tier) => {
                   setLucaModelTier(tier);
-                  storeLucaModelTier(tier);
                 }}
                 onUpgrade={() => openPlans()}
               />
               <ComposerContextUsage
-                messages={contextMessages}
-                draft={value}
                 lucaModelTier={lucaModelTier}
                 billing={billing}
                 disabled={disabled || pending || voice.recording}
@@ -437,67 +465,107 @@ export function PromptForm({
             </div>
 
             <div className="flex shrink-0 items-center gap-1.5">
-              <button
-                type="button"
-                disabled={disabled || pending}
-                onPointerDown={() => {
-                  micSuppressClickRef.current = false;
-                  if (micLongPressRef.current) {
-                    clearTimeout(micLongPressRef.current);
-                  }
-                  micLongPressRef.current = setTimeout(() => {
-                    micSuppressClickRef.current = true;
-                    setVoiceOpen(true);
-                  }, 480);
-                }}
-                onPointerUp={() => {
-                  if (micLongPressRef.current) {
-                    clearTimeout(micLongPressRef.current);
-                    micLongPressRef.current = null;
-                  }
-                }}
-                onPointerLeave={() => {
-                  if (micLongPressRef.current) {
-                    clearTimeout(micLongPressRef.current);
-                    micLongPressRef.current = null;
-                  }
-                }}
-                onClick={() => {
-                  if (micSuppressClickRef.current) {
+              {!streaming ? (
+                <button
+                  type="button"
+                  disabled={disabled || pending}
+                  onPointerDown={() => {
                     micSuppressClickRef.current = false;
-                    return;
-                  }
-                  void voice.start();
-                }}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-emerald-400/90 disabled:opacity-40"
-                title="Voice input (hold for model)"
-                aria-label="Start voice input"
-              >
-                <Mic className="h-4 w-4" strokeWidth={1.75} />
-              </button>
-              <button
-                type="button"
-                disabled={!canSend}
-                onClick={() => void handleSubmit()}
-                className={cn(
-                  "inline-flex h-8 w-8 items-center justify-center rounded-full transition-colors",
-                  canSend
-                    ? "bg-emerald-600 text-white hover:bg-emerald-500 active:bg-emerald-700"
-                    : "bg-zinc-800 text-zinc-500",
-                  "disabled:cursor-not-allowed",
-                )}
-                aria-label="Send"
-              >
-                {pending ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.25} />
-                )}
-              </button>
+                    if (micLongPressRef.current) {
+                      clearTimeout(micLongPressRef.current);
+                    }
+                    micLongPressRef.current = setTimeout(() => {
+                      micSuppressClickRef.current = true;
+                      setVoiceOpen(true);
+                    }, 480);
+                  }}
+                  onPointerUp={() => {
+                    if (micLongPressRef.current) {
+                      clearTimeout(micLongPressRef.current);
+                      micLongPressRef.current = null;
+                    }
+                  }}
+                  onPointerLeave={() => {
+                    if (micLongPressRef.current) {
+                      clearTimeout(micLongPressRef.current);
+                      micLongPressRef.current = null;
+                    }
+                  }}
+                  onClick={() => {
+                    if (micSuppressClickRef.current) {
+                      micSuppressClickRef.current = false;
+                      return;
+                    }
+                    void voice.start();
+                  }}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full text-composer-icon transition-colors hover:bg-composer-icon-hover-bg hover:text-emerald-400 disabled:opacity-40"
+                  title="Voice input (hold for model)"
+                  aria-label="Start voice input"
+                >
+                  <Mic className="h-5 w-5" strokeWidth={1.75} />
+                </button>
+              ) : null}
+              {streaming && onStop ? (
+                <button
+                  type="button"
+                  onClick={onStop}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-emerald-600 text-white transition-colors hover:bg-emerald-500 active:bg-emerald-700"
+                  title="Stop generating"
+                  aria-label="Stop generating"
+                >
+                  <Square className="h-3 w-3 fill-current" strokeWidth={0} />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={!canSend}
+                  onClick={() => void handleSubmit()}
+                  className={cn(
+                    "inline-flex h-9 w-9 items-center justify-center rounded-full transition-colors",
+                    canSend
+                      ? "bg-emerald-600 text-white hover:bg-emerald-500 active:bg-emerald-700"
+                      : "bg-composer-action-disabled text-composer-muted",
+                    "disabled:cursor-not-allowed",
+                  )}
+                  aria-label="Send"
+                >
+                  {pending ? (
+                    <Loader2 className="h-[18px] w-[18px] animate-spin" />
+                  ) : (
+                    <ArrowUp className="h-[18px] w-[18px]" strokeWidth={2.25} />
+                  )}
+                </button>
+              )}
+              {streaming && canSend ? (
+                <button
+                  type="button"
+                  disabled={!canSend}
+                  onClick={() => void handleSubmit()}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-emerald-600 text-white transition-colors hover:bg-emerald-500 active:bg-emerald-700 disabled:cursor-not-allowed"
+                  aria-label="Add to queue"
+                >
+                  {pending ? (
+                    <Loader2 className="h-[18px] w-[18px] animate-spin" />
+                  ) : (
+                    <ArrowUp className="h-[18px] w-[18px]" strokeWidth={2.25} />
+                  )}
+                </button>
+              ) : null}
             </div>
           </div>
         )}
       </div>
+
+      {showDisclaimer ? (
+        <p
+          className={cn(
+            "px-2 text-center text-[11px] leading-snug text-[#717476]",
+            compact ? "mt-2" : "mt-2.5",
+          )}
+        >
+          Luca can make mistakes. Check important info.
+        </p>
+      ) : null}
 
       <VoiceLiveModal
         open={voiceOpen}
@@ -509,6 +577,6 @@ export function PromptForm({
           setVoiceOpen(false);
         }}
       />
-    </>
+    </div>
   );
 }

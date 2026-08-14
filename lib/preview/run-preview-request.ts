@@ -6,8 +6,8 @@ import { withLock } from "@/lib/preview/mutex";
 import {
   ensurePreviewServer,
   getPreviewServer,
-  stopPreviewServer,
 } from "@/lib/preview/server-manager";
+import { removePreviewWorkspace } from "@/lib/preview/cleanup-chat";
 import { withPublicPreviewUrl } from "@/lib/preview/public-url";
 import { syncPreviewWorkspace } from "@/lib/preview/workspace";
 import type { ProjectFile } from "@/lib/types";
@@ -70,6 +70,6 @@ export async function runPreviewDelete(chatId: string | null) {
   if (!chatId) {
     return { status: 400 as const, json: { error: "chatId required" } };
   }
-  await stopPreviewServer(chatId);
+  await removePreviewWorkspace(chatId);
   return { status: 200 as const, json: { ok: true } };
 }

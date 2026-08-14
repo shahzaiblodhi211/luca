@@ -1,4 +1,4 @@
-import { resolvePackageVersion } from "@/lib/sandpack-deps";
+import { isPreinstalledPackage, resolvePackageVersion } from "@/lib/sandpack-deps";
 
 /** Host / runtime packages the agent must not override. */
 const BLOCKED = new Set([
@@ -48,6 +48,12 @@ export function assertInstallablePackage(
     return {
       ok: false,
       error: `"${name}" is provided by the preview runtime — do not install it.`,
+    };
+  }
+  if (isPreinstalledPackage(name)) {
+    return {
+      ok: false,
+      error: `"${name}" is already preinstalled in every preview — import it directly; do not call install_package.`,
     };
   }
   return {

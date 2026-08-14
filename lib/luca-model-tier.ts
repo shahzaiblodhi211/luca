@@ -107,3 +107,40 @@ export function storeLucaModelTier(tier: LucaModelTier) {
     /* ignore */
   }
 }
+
+/** Prefer localStorage, then chat record, then active UI selection. */
+export function resolveLucaModelTierForUi(
+  planId: PlanId,
+  opts?: {
+    chatTier?: string | null;
+    current?: LucaModelTier | null;
+  },
+): LucaModelTier {
+  try {
+    if (typeof window !== "undefined") {
+      const stored = parseLucaModelTier(localStorage.getItem(STORAGE_KEY));
+      if (stored && canUseLucaModelTier(planId, stored)) return stored;
+    }
+  } catch {
+    /* ignore */
+  }
+
+  const fromChat = parseLucaModelTier(opts?.chatTier);
+  if (fromChat && canUseLucaModelTier(planId, fromChat)) return fromChat;
+
+  if (opts?.current && canUseLucaModelTier(planId, opts.current)) {
+    return opts.current;
+  }
+
+  return defaultLucaModelTierForPlan(planId);
+}
+
+/** Trust chat record on first paint (server already resolved tier on create). */
+export function lucaModelTierFromChatRecord(
+  chatTier?: string | null,
+  planId: PlanId = "free",
+): LucaModelTier {
+  const fromChat = parseLucaModelTier(chatTier);
+  if (fromChat) return fromChat;
+  return resolveLucaModelTierForUi(planId);
+}

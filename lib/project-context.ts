@@ -1,5 +1,6 @@
 import type { ChatAttachment, ChatDoc, ChatMessage, ProjectFile } from "./types";
 import type { ChatTurn } from "./gemini";
+import { PREINSTALLED_PACKAGES } from "@/lib/sandpack-deps";
 import {
   enrichTextWithUrlInspections,
   extractUrls,
@@ -33,13 +34,24 @@ export function formatProjectFiles(
     .join("\n\n");
 
   const pkgEntries = Object.entries(packages ?? {});
-  const pkgBlock = pkgEntries.length
-    ? [
-        "",
-        "INSTALLED PACKAGES (already available — import freely; use install_package for new ones):",
-        ...pkgEntries.map(([name, version]) => `- ${name}@${version}`),
-      ]
-    : [];
+  const preinstalled = Object.entries(PREINSTALLED_PACKAGES).map(
+    ([name, version]) => `- ${name}@${version}`,
+  );
+  const extraInstalled = pkgEntries
+    .filter(([name]) => !(name in PREINSTALLED_PACKAGES))
+    .map(([name, version]) => `- ${name}@${version}`);
+  const pkgBlock = [
+    "",
+    "PREINSTALLED PACKAGES (always available — import freely; never install_package these):",
+    ...preinstalled,
+    ...(extraInstalled.length
+      ? [
+          "",
+          "ADDITIONAL PACKAGES (installed this session via install_package):",
+          ...extraInstalled,
+        ]
+      : []),
+  ];
 
   return [
     EDIT_RULES,

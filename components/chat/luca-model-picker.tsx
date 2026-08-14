@@ -26,6 +26,8 @@ type Props = {
   onUpgrade: () => void;
   disabled?: boolean;
   compact?: boolean;
+  /** Composer toolbar vs home/chat top bar */
+  variant?: "composer" | "header";
 };
 
 const SHORT_LABEL: Record<LucaModelTier, string> = {
@@ -42,7 +44,7 @@ function TierIcon({
   className?: string;
 }) {
   const props = {
-    className: cn("h-3.5 w-3.5 shrink-0", className),
+    className: cn("h-4 w-4 shrink-0", className),
     strokeWidth: 1.75,
   };
   if (tier === "ultra") return <Zap {...props} />;
@@ -64,6 +66,7 @@ export function LucaModelPicker({
   onUpgrade,
   disabled,
   compact,
+  variant = "composer",
 }: Props) {
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -78,6 +81,7 @@ export function LucaModelPicker({
   const hasLocked = LUCA_MODEL_TIER_ORDER.some(
     (t) => !canUseLucaModelTier(planId, t),
   );
+  const isHeader = variant === "header";
 
   useEffect(() => setMounted(true), []);
 
@@ -158,7 +162,7 @@ export function LucaModelPicker({
             : { top: menuPos.top }),
           zIndex: 200,
         }}
-        className="max-h-[min(70vh,320px)] overflow-y-auto overflow-x-hidden rounded-2xl border border-zinc-800 bg-[#141414] shadow-xl shadow-black/60"
+        className="max-h-[min(70vh,360px)] overflow-y-auto overflow-x-hidden rounded-2xl border border-composer-border bg-zinc-950 p-1 shadow-2xl shadow-black/40"
       >
         <div className="py-1">
           {LUCA_MODEL_TIER_ORDER.map((tier) => {
@@ -190,7 +194,10 @@ export function LucaModelPicker({
               >
                 <TierIcon
                   tier={tier}
-                  className={allowed ? "text-zinc-400" : "text-zinc-600"}
+                  className={cn(
+                    "h-4 w-4",
+                    allowed ? "text-composer-icon" : "text-zinc-600",
+                  )}
                 />
                 <span
                   className={cn(
@@ -203,7 +210,7 @@ export function LucaModelPicker({
                 {allowed ? (
                   <Check
                     className={cn(
-                      "h-4 w-4 shrink-0 text-zinc-100",
+                      "h-4 w-4 shrink-0 text-composer-fg",
                       selected ? "opacity-100" : "opacity-0",
                     )}
                   />
@@ -231,7 +238,7 @@ export function LucaModelPicker({
                 setOpen(false);
                 onUpgrade();
               }}
-              className="shrink-0 rounded-full bg-white px-3.5 py-1.5 text-[12px] font-semibold text-black transition-colors hover:bg-zinc-200"
+              className="shrink-0 rounded-full bg-emerald-600 px-3.5 py-1.5 text-[12px] font-semibold text-white transition-colors hover:bg-emerald-500"
             >
               Upgrade
             </button>
@@ -251,17 +258,32 @@ export function LucaModelPicker({
         aria-controls={listId}
         onClick={() => setOpen((o) => !o)}
         className={cn(
-          "inline-flex h-8 max-w-[9.5rem] items-center gap-1 rounded-full px-2 text-[12px] transition-colors sm:max-w-[11rem]",
-          "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100",
-          "disabled:cursor-not-allowed disabled:opacity-40",
-          open && "bg-zinc-800 text-zinc-100",
+          "inline-flex items-center gap-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+          variant === "header"
+            ? cn(
+                "rounded-lg px-2 py-1.5 text-[17px] font-semibold text-composer-fg",
+                "hover:bg-composer-icon-hover-bg",
+                open && "bg-composer-icon-hover-bg",
+              )
+            : cn(
+                "h-9 max-w-[9.5rem] gap-1.5 rounded-full px-2.5 text-[13px] sm:max-w-[11rem]",
+                "text-composer-icon hover:bg-composer-icon-hover-bg hover:text-composer-icon-hover",
+                open && "bg-composer-icon-hover-bg text-composer-icon-hover",
+              ),
         )}
       >
-        <TierIcon tier={value} className="text-zinc-500" />
-        <span className="truncate font-medium text-zinc-200">{label}</span>
+        {variant === "header" ? (
+          <span>Luca</span>
+        ) : (
+          <>
+            <TierIcon tier={value} className="text-composer-muted" />
+            <span className="truncate font-medium text-composer-fg">{label}</span>
+          </>
+        )}
         <ChevronDown
           className={cn(
-            "h-3 w-3 shrink-0 opacity-70 transition-transform",
+            "shrink-0 text-composer-muted transition-transform",
+            variant === "header" ? "h-4 w-4" : "h-3.5 w-3.5 opacity-70",
             open && "rotate-180",
           )}
         />

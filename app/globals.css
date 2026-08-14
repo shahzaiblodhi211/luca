@@ -2,6 +2,7 @@
 @import "tw-animate-css";
 @import "streamdown/styles.css";
 @import "katex/dist/katex.min.css";
+@plugin "@tailwindcss/typography";
 
 /* Required for Streamdown markdown styles (AI Elements / Streamdown docs) */
 @source "../node_modules/streamdown/dist/*.js";
@@ -29,6 +30,20 @@
   --destructive-foreground: #fafafa;
   --border: #27272a;
   --input: #27272a;
+  --input-bg: #212121;
+  --user-bubble-bg: #2f2f2f;
+  --user-bubble-fg: #ffffff;
+  --composer-bg: #212121;
+  --composer-border: #333333;
+  --composer-border-focus: #525252;
+  --composer-fg: #fafafa;
+  --composer-muted: #a1a1aa;
+  --composer-icon: #d4d4d8;
+  --composer-icon-hover: #ffffff;
+  --composer-icon-hover-bg: #333333;
+  --composer-action-disabled: #2a2a2a;
+  --message-action-icon: #c7c7c7;
+  --message-action-icon-hover: #ffffff;
   --ring: #d4d4d8;
   --radius: 0.5rem;
   --scrollbar-size: 8px;
@@ -56,6 +71,20 @@
   --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
+  --color-input-bg: var(--input-bg);
+  --color-user-bubble-bg: var(--user-bubble-bg);
+  --color-user-bubble-fg: var(--user-bubble-fg);
+  --color-composer-bg: var(--composer-bg);
+  --color-composer-border: var(--composer-border);
+  --color-composer-border-focus: var(--composer-border-focus);
+  --color-composer-fg: var(--composer-fg);
+  --color-composer-muted: var(--composer-muted);
+  --color-composer-icon: var(--composer-icon);
+  --color-composer-icon-hover: var(--composer-icon-hover);
+  --color-composer-icon-hover-bg: var(--composer-icon-hover-bg);
+  --color-composer-action-disabled: var(--composer-action-disabled);
+  --color-message-action-icon: var(--message-action-icon);
+  --color-message-action-icon-hover: var(--message-action-icon-hover);
   --color-ring: var(--ring);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -127,6 +156,181 @@ body {
 .luca-thinking-scroll::-webkit-scrollbar-thumb {
   display: none !important;
   background: transparent !important;
+}
+
+@keyframes luca-shimmer-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.luca-shimmer-sweep {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.04) 45%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.04) 55%,
+    transparent 100%
+  );
+  animation: luca-shimmer-sweep 1.6s ease-in-out infinite;
+}
+
+/* ChatGPT-style assistant markdown — flat, system UI typography */
+.markdown-new-styling.prose {
+  --tw-prose-body: #ececec;
+  --tw-prose-headings: #ececec;
+  --tw-prose-bold: #ececec;
+  --tw-prose-links: #58a6ff;
+  --tw-prose-bullets: #ececec;
+  --tw-prose-counters: #ececec;
+  --tw-prose-quotes: #ececec;
+  --tw-prose-quote-borders: #3f3f46;
+  --tw-prose-captions: #a1a1aa;
+  --tw-prose-code: #ececec;
+  --tw-prose-pre-code: #ececec;
+  --tw-prose-th-borders: #3f3f46;
+  --tw-prose-td-borders: #3f3f46;
+
+  max-width: none;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+  font-size: 1rem;
+  font-weight: 400;
+  line-height: 1.75;
+  letter-spacing: normal;
+  word-spacing: normal;
+  color: #ececec;
+}
+
+.markdown-new-styling.prose :where(p, li, blockquote, td, th) {
+  font-weight: 400;
+  letter-spacing: normal;
+  word-spacing: normal;
+}
+
+.markdown-new-styling.prose :where(p) {
+  margin-top: 0;
+  margin-bottom: 1em;
+}
+
+.markdown-new-styling.prose :where(p:last-child) {
+  margin-bottom: 0;
+}
+
+.markdown-new-styling.prose :where(p:has(+ ul), p:has(+ ol)) {
+  margin-bottom: 0.5em;
+}
+
+.markdown-new-styling.prose :where(ul, ol) {
+  margin-top: 0;
+  margin-bottom: 1em;
+  padding-left: 1.625em;
+  list-style-position: outside;
+}
+
+.markdown-new-styling.prose :where(ul) {
+  list-style-type: disc;
+}
+
+.markdown-new-styling.prose :where(ol) {
+  list-style-type: decimal;
+}
+
+.markdown-new-styling.prose :where(li) {
+  margin-top: 0;
+  margin-bottom: 0.625em;
+  padding-left: 0.125em;
+  line-height: 1.75;
+}
+
+.markdown-new-styling.prose :where(li:last-child) {
+  margin-bottom: 0;
+}
+
+.markdown-new-styling.prose :where(li::marker) {
+  color: #ececec;
+}
+
+/* Markdown lists wrap item text in <p> — collapse extra paragraph gaps */
+.markdown-new-styling.prose :where(li > p) {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.markdown-new-styling.prose :where(li > p + p) {
+  margin-top: 0.75em;
+}
+
+.markdown-new-styling.prose :where(ul ul, ul ol, ol ul, ol ol) {
+  margin-top: 0.375em;
+  margin-bottom: 0.375em;
+}
+
+.markdown-new-styling.prose :where(h1, h2, h3, h4) {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+}
+
+.markdown-new-styling.prose :where(h1:first-child, h2:first-child, h3:first-child, h4:first-child) {
+  margin-top: 0;
+}
+
+.markdown-new-styling.prose :where(strong) {
+  font-weight: 600;
+  color: #ececec;
+}
+
+.markdown-new-styling.prose :where(li strong) {
+  font-weight: 600;
+}
+
+.markdown-new-styling.prose :where(a) {
+  color: #58a6ff;
+  font-weight: 400;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-new-styling.prose :where(code):not(:where(pre code)) {
+  font-size: 0.875em;
+  font-weight: 400;
+  letter-spacing: normal;
+  border-radius: 0.25rem;
+  background: color-mix(in srgb, var(--muted) 80%, transparent);
+  padding: 0.125rem 0.375rem;
+}
+
+.markdown-new-styling.prose :where(pre) {
+  margin-top: 0;
+  margin-bottom: 1em;
+  overflow-x: auto;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--muted) 50%, transparent);
+  padding: 0.75rem;
+  font-weight: 400;
+}
+
+.markdown-new-styling.prose :where(blockquote) {
+  border-left: 2px solid var(--border);
+  padding-left: 0.75rem;
+  color: #c7c7c7;
+  font-weight: 400;
 }
 
 .sandpack-root,

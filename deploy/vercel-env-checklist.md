@@ -37,13 +37,50 @@ Or set **`GEMINI_API_KEYS`** = comma-separated keys (if supported by your loader
 
 ## Images (match your local setup)
 
-| `IMAGE_PROVIDER` | `pollinations` or `gemini` |
-| `POLLINATIONS_MODEL` | `flux` (if using pollinations) |
+| `IMAGE_PROVIDER` | `auto` (default), `gemini`, `pexels`, or `pollinations` |
+| `GEMINI_IMAGE_MODEL` | `gemini-3.1-flash-lite-image` (logos/illustrations) |
+| `PEXELS_API_KEY` | Free at [pexels.com/api](https://www.pexels.com/api/) — stock photos for heroes/backgrounds |
 
-## Optional (email reset)
+## Auth email (Zoho — info@lucaai.app)
 
-| `RESEND_API_KEY` | |
-| `AUTH_EMAIL_FROM` | `Luca AI <noreply@lucaai.app>` |
+See [ZOHO-EMAIL.md](./ZOHO-EMAIL.md).
+
+| Name | Example |
+|------|---------|
+| `SMTP_HOST` | `smtppro.zoho.com` |
+| `SMTP_PORT` | `465` |
+| `SMTP_SECURE` | `1` |
+| `SMTP_USER` | `info@lucaai.app` |
+| `SMTP_PASS` | Zoho app-specific password |
+| `AUTH_EMAIL_FROM` | `luca Team <info@lucaai.app>` |
+| `AUTH_EMAIL_REPLY_TO` | `info@lucaai.app` |
+
+Optional fallback: `RESEND_API_KEY` (used only if SMTP fails or is unset).
+
+## OAuth (Google, GitHub, Apple)
+
+See [OAUTH.md](./OAUTH.md). Minimum for Google + GitHub:
+
+| Name | Notes |
+|------|--------|
+| `GOOGLE_CLIENT_ID` | Google OAuth web client |
+| `GOOGLE_CLIENT_SECRET` | |
+| `GITHUB_CLIENT_ID` | GitHub OAuth app |
+| `GITHUB_CLIENT_SECRET` | |
+
+Apple (optional): `APPLE_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY`
+
+## Billing (Polar.sh)
+
+See [POLAR.md](./POLAR.md).
+
+| Name | Notes |
+|------|--------|
+| `POLAR_ACCESS_TOKEN` | Polar organization token |
+| `POLAR_SERVER` | `sandbox` or `production` |
+| `POLAR_WEBHOOK_SECRET` | Webhook signing secret |
+| `POLAR_PRODUCT_ID_PLUS` | Plus product UUID |
+| `POLAR_PRODUCT_ID_PRO` | Pro product UUID |
 
 ## Preview (Phase 2 — after DigitalOcean worker)
 
