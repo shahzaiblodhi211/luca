@@ -156,6 +156,16 @@ function phaseIdFromArgs(
   path?: string,
   action: "create" | "update" | "delete" = "create",
 ): string {
+  if (path) {
+    for (let i = state.timeline.length - 1; i >= 0; i--) {
+      const p = state.timeline[i];
+      if (p.type === "phase" && p.files.some((f) => f.path === path)) {
+        state.currentPhaseId = p.id;
+        return p.id;
+      }
+    }
+  }
+
   const fromArg = String(args.phase_id || args.phaseId || "").trim();
   if (
     fromArg &&
@@ -1201,6 +1211,14 @@ export async function executeAgentTool(
         return { ok: false, result: checked.error, events: [] };
       }
       const { name: pkgName, version } = checked;
+      const { npmPackageExists } = await import("@/lib/preview/npm-registry");
+      if (!(await npmPackageExists(pkgName))) {
+        return {
+          ok: false,
+          result: `"${pkgName}" is not on npm. Use a real package (framer-motion, three, lucide-react) instead of inventing names.`,
+          events: [],
+        };
+      }
       const phaseId = phaseIdFromArgs(state, args);
       state.packages.set(pkgName, version);
       const detail = `${pkgName}@${version}`;

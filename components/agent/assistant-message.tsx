@@ -57,6 +57,38 @@ type Group =
       part: Extract<AssistantPart, { type: "generated_image" }>;
     };
 
+function collapsePhases(parts: BuildPhasePart[]): BuildPhasePart[] {
+  const order: string[] = [];
+  const byKey = new Map<string, BuildPhasePart>();
+  for (const phase of parts) {
+    const key = phase.files[0]?.path || phase.commands[0]?.name || phase.id;
+    const prev = byKey.get(key);
+    if (!prev) {
+      byKey.set(key, phase);
+      order.push(key);
+      continue;
+    }
+    const files = [...prev.files];
+    for (const file of phase.files) {
+      const i = files.findIndex((f) => f.path === file.path);
+      if (i < 0) files.push(file);
+      else if (file.status === "done" || files[i].status !== "done") {
+        files[i] = { ...files[i], ...file };
+      }
+    }
+    const commands = [...prev.commands];
+    for (const cmd of phase.commands) {
+      const i = commands.findIndex((c) => c.name === cmd.name);
+      if (i < 0) commands.push(cmd);
+      else if (cmd.status === "done" || commands[i].status !== "done") {
+        commands[i] = { ...commands[i], ...cmd };
+      }
+    }
+    byKey.set(key, { ...prev, files, commands });
+  }
+  return order.map((k) => byKey.get(k)!);
+}
+
 function groupParts(parts: AssistantPart[]): Group[] {
   const out: Group[] = [];
   let think: Extract<AssistantPart, { type: "thinking" }> | null = null;
@@ -201,7 +233,7 @@ export function AssistantMessage({
                 key={`phases-${g.parts[0]?.id ?? i}`}
                 className="space-y-0.5 py-0.5"
               >
-                {g.parts.map((phase) => (
+                {collapsePhases(g.parts).map((phase) => (
                   <BuildPhase key={`phase-${phase.id}`} phase={phase} />
                 ))}
               </div>

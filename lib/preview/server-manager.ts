@@ -112,13 +112,13 @@ async function findFreePort(prefer?: number): Promise<number> {
   throw new Error("No free preview ports (4100–4199)");
 }
 
-async function httpAlive(url: string, timeoutMs = 1500): Promise<boolean> {
+async function httpOk(url: string, timeoutMs = 1500): Promise<boolean> {
   try {
     const res = await fetch(url, {
       signal: AbortSignal.timeout(timeoutMs),
       redirect: "manual",
     });
-    return res.status > 0;
+    return res.status >= 200 && res.status < 400;
   } catch {
     return false;
   }
@@ -132,7 +132,7 @@ async function waitForReady(
   const start = Date.now();
   const url = previewReadyCheckUrl(port, chatId);
   while (Date.now() - start < timeoutMs) {
-    if (await httpAlive(url, 3000)) return;
+    if (await httpOk(url, 3000)) return;
     await new Promise((r) => setTimeout(r, 500));
   }
   throw new Error(`Preview server on :${port} did not become ready in time`);
@@ -367,7 +367,7 @@ export async function ensurePreviewServer(
 
   if (existing && !opts?.restart) {
     if (existing.info.status === "ready") {
-      if (await httpAlive(previewReadyCheckUrl(existing.info.port)))
+      if (await httpOk(previewReadyCheckUrl(existing.info.port, id)))
         return existing.info;
     }
     await killManaged(existing);
@@ -382,9 +382,7 @@ export async function ensurePreviewServer(
     if (persisted) {
       const expectedBase = previewBasePathForChat(id);
       const url = previewReadyCheckUrl(persisted.port, id);
-      const loopback = previewLoopbackUrl(persisted.port);
-      const alive =
-        (await httpAlive(url)) || (await httpAlive(loopback));
+      const alive = await httpOk(url);
       if (alive) {
         const sameBase =
           (persisted.basePath ?? null) === (expectedBase ?? null);
@@ -392,7 +390,7 @@ export async function ensurePreviewServer(
           const info: PreviewServerInfo = {
             chatId: id,
             port: persisted.port,
-            url: loopback,
+            url: previewLoopbackUrl(persisted.port),
             pid: persisted.pid,
             status: "ready",
             startedAt: persisted.startedAt,

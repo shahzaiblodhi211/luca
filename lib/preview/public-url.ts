@@ -13,6 +13,47 @@ export function previewPathPrefix(): string {
   return prefix.startsWith("/") ? prefix : `/${prefix}`;
 }
 
+/** Public URL prefixes we accept (env + legacy `/_preview`). */
+export function previewPathAliases(): string[] {
+  const aliases = new Set(["/p", "/_preview", previewPathPrefix()]);
+  return [...aliases];
+}
+
+export function matchPublicPreviewPath(pathname: string): {
+  chatId: string;
+  prefix: string;
+  rest: string;
+} | null {
+  const path = pathname.startsWith("/") ? pathname : `/${pathname}`;
+  for (const prefix of previewPathAliases()) {
+    const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const m = path.match(
+      new RegExp(`^${escaped}/([a-zA-Z0-9_-]{1,64})(/.*)?$`),
+    );
+    if (m?.[1]) {
+      return {
+        chatId: m[1],
+        prefix,
+        rest: m[2] || "/",
+      };
+    }
+  }
+  return null;
+}
+
+/** Map an incoming public path onto the Next `basePath` this process was started with. */
+export function rewritePreviewUpstreamPath(
+  pathname: string,
+  chatId: string,
+): string {
+  const matched = matchPublicPreviewPath(pathname);
+  const canonical = previewBasePathForChat(chatId);
+  const rest = matched?.rest || "/";
+  if (!canonical) return rest.startsWith("/") ? rest : `/${rest}`;
+  if (rest === "/") return `${canonical}/`;
+  return `${canonical}${rest}`;
+}
+
 export function previewPublicOriginHost(): string | null {
   const raw = process.env.PREVIEW_PUBLIC_ORIGIN?.trim();
   if (!raw) return null;

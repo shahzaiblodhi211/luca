@@ -11,7 +11,7 @@ import { isVercelOAuthConfigured } from "@/lib/vercel-oauth";
 import type { ProjectFile } from "@/lib/types";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 180;
 
 export async function POST(req: Request) {
   const user = await getSessionUser();
@@ -57,7 +57,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const deployFiles = buildPublishFiles(
+    const deployFiles = await buildPublishFiles(
       files,
       body.packages || {},
       body.imageDataUrls || {},

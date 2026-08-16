@@ -121,6 +121,7 @@ export function CodePreview({
   const [routes, setRoutes] = useState<PreviewRoute[]>([]);
   const [activePath, setActivePath] = useState("/");
   const [iframeKey, setIframeKey] = useState(0);
+  const [iframeLoaded, setIframeLoaded] = useState(false);
   const syncGen = useRef(0);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const baseUrlRef = useRef<string | null>(null);
@@ -153,6 +154,10 @@ export function CodePreview({
   }, [baseUrl]);
 
   const previewSrc = baseUrl ? previewUrlForRoute(baseUrl, activePath) : null;
+
+  useEffect(() => {
+    setIframeLoaded(false);
+  }, [previewSrc, iframeKey]);
 
   const softReloadIframe = useCallback(() => {
     const frame = iframeRef.current;
@@ -728,6 +733,14 @@ export function CodePreview({
                   </button>
                 </div>
               )}
+              {revealed && previewSrc && !iframeLoaded && status !== "error" && (
+                <div className="absolute inset-0 z-10 flex bg-zinc-950">
+                  <ShimmerLoader
+                    label="Loading preview…"
+                    className="h-full w-full"
+                  />
+                </div>
+              )}
               {previewSrc ? (
                 <div
                   className={cn(
@@ -742,6 +755,7 @@ export function CodePreview({
                     key={`${iframeKey}:${previewSrc}:${viewport}`}
                     title="Next.js preview"
                     src={previewSrc}
+                    onLoad={() => setIframeLoaded(true)}
                     className="min-h-0 w-full flex-1 border-0 bg-white"
                     sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
                   />

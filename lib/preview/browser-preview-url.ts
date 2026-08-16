@@ -14,12 +14,6 @@ function clientPreviewOrigin(): string {
   ).replace(/\/+$/, "");
 }
 
-function pathPrefix(): string {
-  return (
-    process.env.NEXT_PUBLIC_PREVIEW_PATH_PREFIX?.trim() || "/p"
-  ).replace(/\/+$/, "");
-}
-
 function extractChatBasePath(
   payload: PreviewUrlPayload,
   raw: string,
@@ -27,12 +21,9 @@ function extractChatBasePath(
   if (payload.previewBasePath?.trim()) {
     return payload.previewBasePath.replace(/\/+$/, "");
   }
-  const prefix = pathPrefix().replace(/^\/+|\/+$/g, "");
-  const fromChat = raw.match(
-    new RegExp(`\\/${prefix}\\/([a-zA-Z0-9_-]{1,64})`),
-  );
-  if (fromChat?.[1]) return `/${prefix}/${fromChat[1]}`;
-  if (payload.chatId) return `/${prefix}/${payload.chatId}`;
+  const fromUrl = raw.match(/\/(_preview|p)\/([a-zA-Z0-9_-]{1,64})/);
+  if (fromUrl?.[1] && fromUrl[2]) return `/${fromUrl[1]}/${fromUrl[2]}`;
+  if (payload.chatId) return `/p/${payload.chatId}`;
   return null;
 }
 

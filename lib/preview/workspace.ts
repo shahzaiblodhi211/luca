@@ -10,6 +10,11 @@ import {
 import type { ProjectFile } from "@/lib/types";
 import { resolvePreviewDependencies } from "./deps";
 import {
+  LUCA_PKG_STUB,
+  rewriteDroppedPackageImports,
+} from "./rewrite-dropped-imports";
+import { keepInstallableDeps } from "./safe-deps";
+import {
   isHostOwnedPreviewPath,
   normalizePreviewCss,
 } from "./normalize-css";
@@ -295,9 +300,57 @@ export async function ensurePreviewRuntime(
     return { depsHash, installed: false };
   }
 
-  await runNpmInstall(PREVIEW_RUNTIME_DIR);
+  await installPreviewDeps(PREVIEW_RUNTIME_DIR);
   await writeText(hashPath, `${depsHash}\n`);
   return { depsHash, installed: true };
+}
+
+function missingNpmPackages(log: string): string[] {
+  const found = new Set<string>();
+  const quoted = log.matchAll(
+    /404\s+'(@?[A-Za-z0-9._~/-]+)(?:@[^']+)?'\s+is not in this registry/g,
+  );
+  for (const m of quoted) {
+    if (m[1]) found.add(m[1]);
+  }
+  const encoded = log.matchAll(
+    /registry\.npmjs\.org\/(@?[A-Za-z0-9._~%-]+)/g,
+  );
+  for (const m of encoded) {
+    const name = decodeURIComponent((m[1] || "").replace(/%2f/gi, "/"));
+    if (name && !name.includes("npm")) found.add(name.replace(/\/-\/.*$/, ""));
+  }
+  return [...found].filter((n) => n !== "npm" && !n.endsWith(".tgz"));
+}
+
+async function installPreviewDeps(cwd: string): Promise<void> {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      await runNpmInstall(cwd);
+      return;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const missing = missingNpmPackages(message);
+      if (!missing.length) throw err;
+      const pkgPath = path.join(cwd, "package.json");
+      const pkg = JSON.parse(await fs.readFile(pkgPath, "utf8")) as {
+        dependencies?: Record<string, string>;
+      };
+      let dropped = 0;
+      for (const name of missing) {
+        if (pkg.dependencies?.[name]) {
+          delete pkg.dependencies[name];
+          dropped += 1;
+        }
+      }
+      if (!dropped) throw err;
+      console.warn(
+        `[preview] skipped missing npm package(s): ${missing.join(", ")}`,
+      );
+      await writeText(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+    }
+  }
+  throw new Error("npm install failed after dropping missing packages");
 }
 
 function runNpmInstall(cwd: string): Promise<void> {
@@ -385,7 +438,10 @@ export async function syncPreviewWorkspace(
   const dir = workspaceDirFor(id);
   await ensureDir(dir);
 
-  const deps = resolvePreviewDependencies(files, packages);
+  const { deps, dropped } = await keepInstallableDeps(
+    resolvePreviewDependencies(files, packages),
+  );
+  const droppedSet = new Set(dropped);
   const { depsHash, installed } = await ensurePreviewRuntime(deps);
 
   const byPath = new Map<string, string>();
@@ -399,6 +455,7 @@ export async function syncPreviewWorkspace(
   byPath.set("postcss.config.mjs", SCAFFOLD_POSTCSS);
   byPath.set("next.config.ts", SCAFFOLD_NEXT_CONFIG);
   byPath.set(".gitignore", SCAFFOLD_GITIGNORE);
+  byPath.set("lib/luca-pkg-stub.ts", LUCA_PKG_STUB);
 
   const allCode = files.map((f) => f.code).join("\n");
   for (const [p, code] of Object.entries(resolveNextUiStubFiles(allCode))) {
@@ -473,6 +530,13 @@ export async function syncPreviewWorkspace(
     byPath.set("app/layout.tsx", nextLayout);
   }
 
+  if (droppedSet.size) {
+    for (const [p, code] of byPath) {
+      if (!/\.(tsx?|jsx?)$/i.test(p)) continue;
+      byPath.set(p, rewriteDroppedPackageImports(code, droppedSet));
+    }
+  }
+
   byPath.set("public/luca-inspector.js", loadLucaInspectorScript());
 
   const workspacePkg = {
@@ -499,9 +563,9 @@ export async function syncPreviewWorkspace(
   await materializeLucaApiImages(byPath, dir, lucaOrigin);
   await materializeLucaAttachments(byPath, dir, lucaOrigin);
 
-  for (const [rel, code] of byPath) {
-    await writeText(path.join(dir, rel), code);
-  }
+  await Promise.all(
+    [...byPath].map(([rel, code]) => writeText(path.join(dir, rel), code)),
+  );
 
   await pruneStaleSourceFiles(dir, new Set(byPath.keys()));
 

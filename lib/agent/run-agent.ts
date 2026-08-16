@@ -39,11 +39,6 @@ import {
 import { sanitizeGeneratedCode } from "@/lib/agent/sanitize-code";
 import { chunkForStream, emitPacedText } from "@/lib/agent/pace-text";
 import {
-  narrationForBuildStep,
-  narrationForToolCall,
-  stepHasBuildWork,
-} from "@/lib/agent/build-narration";
-import {
   ensurePhaseOnTimeline,
   upsertPhaseFile,
 } from "@/lib/agent/build-timeline";
@@ -429,6 +424,15 @@ async function runToolCalls(
     const batch = pending;
     pending = [];
     for (const call of batch) announce(call);
+    if (batch.some((c) =>
+      c.name === "write_file" ||
+      c.name === "edit_file" ||
+      c.name === "write_image" ||
+      c.name === "delete_file" ||
+      c.name === "install_package"
+    )) {
+      await new Promise((r) => setTimeout(r, 120));
+    }
 
     const outcomes = await Promise.all(
       batch.map(async (call) => {
@@ -695,23 +699,6 @@ export async function streamAgentEvents(
             }
           };
 
-          const persistStepNarration = (line: string) => {
-            const text = line.trim();
-            if (!text || stepNarrationEmitted) return;
-            stepNarrationEmitted = true;
-            streamedText = streamedText || text;
-            if (
-              !state.timeline.some((p) => p.type === "text" && p.text === text)
-            ) {
-              state.timeline.push({ type: "text", text });
-            }
-            if (!state.texts.includes(text)) state.texts.push(text);
-            if (!textDeltaOpen) {
-              void emitPacedText(emit, text);
-              textDeltaOpen = true;
-            }
-          };
-
           const emitThoughtTextDelta = (delta: string) => {
             if (!delta) return;
             streamedThought += delta;
@@ -856,12 +843,7 @@ export async function streamAgentEvents(
                       name === "delete_file" ||
                       name === "install_package")
                   ) {
-                    const existing = sanitizeVisibleReply(streamedText.trim());
-                    if (existing) {
-                      stepNarrationEmitted = true;
-                    } else {
-                      persistStepNarration(narrationForToolCall(name, args));
-                    }
+                    stepNarrationEmitted = true;
                   }
                   if (name === "think") {
                     void emitThinkToolPlan(
@@ -978,8 +960,6 @@ export async function streamAgentEvents(
                 textDeltaOpen = true;
               }
               stepNarrationEmitted = true;
-            } else if (stepHasBuildWork(functionCalls)) {
-              persistStepNarration(narrationForBuildStep(functionCalls));
             }
           }
 

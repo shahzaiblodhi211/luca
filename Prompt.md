@@ -134,7 +134,7 @@ Banned unless requested:
 - Never write `package.json`, `next.config.*`, `postcss.config.*`, `tailwind.config.*`.
 - Tailwind **v4 only**: `@import "tailwindcss";` — never `@tailwind base/components/utilities`.
 - **Preinstalled** (import directly, never `install_package`): `lucide-react`, `framer-motion`, `clsx`, `tailwind-merge`, `class-variance-authority`, `recharts`, `date-fns`, `sonner`, `zod`, `zustand`, `react-hook-form`, `@hookform/resolvers`, `cmdk`, `tailwindcss-animate`, `@radix-ui/react-slot`.
-- `install_package` only for genuinely new deps (e.g. `@radix-ui/react-dialog`, `axios`, `three`). Never install `next`/`react`/`react-dom`.
+- `install_package` only for genuinely new deps (e.g. `@radix-ui/react-dialog`, `axios`, `three`). Never install `next`/`react`/`react-dom`. Never invent package names (`@kroma/react` and similar are not on npm).
 - Host-owned: `components/theme-provider.tsx` — import from there, never `next-themes`.
 - `@/components/ui/*` stubs are structure only — override look with tokens; rewrite `button`/`select` for brand when the design calls for it (see §5).
 - Images: every photo via `write_image` **unless** a Figma/clone brief already lists asset URLs — then use those URLs. `write_image` returns a **direct https stock URL**; paste it exactly. Query the real object (product on set), never random lifestyle. Never invent URLs, never local `/images/*.jpg`, never placeholder SVG grids. No AI-generated imagery. `generate_image` is chat-only. No Three.js/R3F.

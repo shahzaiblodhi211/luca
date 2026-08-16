@@ -44,6 +44,7 @@ import type {
   BuildPhasePart,
   ProjectFile,
 } from "@/lib/types";
+import { placeFileOnPhases } from "@/lib/agent/build-timeline";
 import type { ImageJob } from "@/lib/resolve-images";
 
 type Acc = {
@@ -176,24 +177,17 @@ function applyEventToAccumulator(event: AgentStreamEvent, acc: Acc) {
         acc.files.delete(event.path);
         if (!acc.deleted.includes(event.path)) acc.deleted.push(event.path);
       }
-      let phase = phaseFor(acc.timeline, event.phaseId);
-      if (!phase) {
-        const id = event.phaseId || `p-auto-${acc.timeline.length}`;
-        upsertLivePhase(acc.timeline, id, "Building project files");
-        phase = phaseFor(acc.timeline, id);
-      }
-      if (phase) {
-        const idx = phase.files.findIndex((f) => f.path === event.path);
-        const item = {
+      acc.timeline = placeFileOnPhases(
+        acc.timeline,
+        {
           path: event.path,
           action: event.action,
           status: event.status,
           language: event.language,
           linesDelta: event.linesDelta,
-        };
-        if (idx >= 0) phase.files[idx] = { ...phase.files[idx], ...item };
-        else phase.files.push(item);
-      }
+        },
+        event.phaseId,
+      );
       break;
     }
     case "command": {

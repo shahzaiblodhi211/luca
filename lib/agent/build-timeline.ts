@@ -55,14 +55,15 @@ export function upsertPhaseFile(
   state: AgentState,
   item: BuildFileItem,
 ): void {
-  const { phaseId } = ensurePhaseOnTimeline(state, "Building project files");
-  const phase = state.timeline.find(
-    (p): p is BuildPhasePart => p.type === "phase" && p.id === phaseId,
+  const prefer =
+    state.currentPhaseId ||
+    ensurePhaseOnTimeline(state, "Building project files").phaseId;
+  state.timeline = placeFileOnPhases(state.timeline, item, prefer);
+  const landed = state.timeline.find(
+    (p): p is BuildPhasePart =>
+      p.type === "phase" && p.files.some((f) => f.path === item.path),
   );
-  if (!phase) return;
-  const idx = phase.files.findIndex((f) => f.path === item.path);
-  if (idx >= 0) phase.files[idx] = { ...phase.files[idx], ...item };
-  else phase.files.push(item);
+  if (landed) state.currentPhaseId = landed.id;
 }
 
 export function upsertPhaseCommand(
@@ -77,6 +78,46 @@ export function upsertPhaseCommand(
   const idx = phase.commands.findIndex((c) => c.name === item.name);
   if (idx >= 0) phase.commands[idx] = { ...phase.commands[idx], ...item };
   else phase.commands.push(item);
+}
+
+/** One row per file: move/update onto the phase that already has this path. */
+export function placeFileOnPhases(
+  parts: AssistantPart[],
+  item: BuildFileItem,
+  preferPhaseId?: string,
+): AssistantPart[] {
+  const existing = parts.find(
+    (p): p is BuildPhasePart =>
+      p.type === "phase" && p.files.some((f) => f.path === item.path),
+  );
+  const targetId = existing?.id || preferPhaseId;
+  let foundTarget = false;
+  const next: AssistantPart[] = [];
+  for (const p of parts) {
+    if (p.type !== "phase") {
+      next.push(p);
+      continue;
+    }
+    const files = p.files.filter((f) => f.path !== item.path);
+    if (p.id === targetId) {
+      foundTarget = true;
+      next.push({ ...p, files: [...files, item] });
+      continue;
+    }
+    if (files.length || p.commands.length) {
+      next.push(files === p.files ? p : { ...p, files });
+    }
+  }
+  if (!foundTarget) {
+    next.push({
+      type: "phase",
+      id: targetId || `p-file-${next.length}`,
+      text: "Building project files",
+      files: [item],
+      commands: [],
+    });
+  }
+  return next;
 }
 
 export function startNewPhase(state: AgentState, text: string): string {

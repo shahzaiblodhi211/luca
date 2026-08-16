@@ -59,7 +59,9 @@ export function AuthQueryOpener() {
     if (vercelError) {
       const messages: Record<string, string> = {
         not_configured:
-          "Vercel OAuth is not set up. Paste a personal token instead.",
+          "Vercel connect is not set up. Add the integration client ID, secret, and slug.",
+        missing_slug:
+          "Add VERCEL_INTEGRATION_SLUG to .env.local (the URL slug from Integrations Console), then restart.",
         not_signed_in: "Sign in first, then connect Vercel.",
         denied: "Vercel access was cancelled.",
         missing_code: "Vercel connect did not complete. Try again.",

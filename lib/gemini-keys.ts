@@ -310,6 +310,32 @@ function savePersisted(): void {
   }
 }
 
+function parseGeminiKeysFile(raw: string): string[] {
+  const byIndex = new Map<number, string>();
+  const loose: string[] = [];
+  for (const original of raw.split(/\r?\n/)) {
+    const line = original.trim();
+    if (!line || line.startsWith("#")) continue;
+    const numbered = line.match(
+      /^(?:export\s+)?GEMINI_API_KEY_(\d+)\s*=\s*(.+)$/i,
+    );
+    if (numbered) {
+      const n = Number(numbered[1]);
+      const value = numbered[2].trim().replace(/^["']|["']$/g, "");
+      if (value && n >= 1 && n <= MAX_GEMINI_KEYS) byIndex.set(n, value);
+      continue;
+    }
+    loose.push(line.replace(/^["']|["']$/g, ""));
+  }
+  const ordered: string[] = [];
+  const maxN = Math.max(0, ...byIndex.keys());
+  for (let i = 1; i <= maxN; i++) {
+    const value = byIndex.get(i);
+    if (value) ordered.push(value);
+  }
+  return [...ordered, ...loose];
+}
+
 function keysFileMeta(): { abs: string | null; mtime: number } {
   const filePath = process.env.GEMINI_API_KEYS_FILE?.trim();
   if (!filePath) return { abs: null, mtime: 0 };
@@ -402,10 +428,7 @@ function loadKeysFromConfig(): {
   if (meta.abs) {
     try {
       const raw = readFileSync(meta.abs, "utf8");
-      fromFile = raw
-        .split(/\r?\n/)
-        .map((line) => line.replace(/#.*$/, "").trim())
-        .filter(Boolean);
+      fromFile = parseGeminiKeysFile(raw);
     } catch (err) {
       console.warn(
         `[gemini-keys] GEMINI_API_KEYS_FILE unreadable (${meta.abs}):`,
@@ -436,7 +459,8 @@ function loadKeysFromConfig(): {
  * Load all configured keys (up to {@link MAX_GEMINI_KEYS}):
  * - GEMINI_API_KEY_1 … GEMINI_API_KEY_500
  * - and/or GEMINI_API_KEYS=keyA,keyB,… (comma / semicolon / whitespace)
- * - and/or GEMINI_API_KEYS_FILE=path/to/keys.txt (one key per line)
+ * - and/or GEMINI_API_KEYS_FILE=path/to/keys.txt
+ *   (`GEMINI_API_KEY_1=…` lines, and/or one raw key per line)
  *
  * Reloads when the keys file mtime changes (dev servers keep a stale cache otherwise).
  */

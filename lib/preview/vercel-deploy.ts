@@ -67,12 +67,58 @@ async function deployOnce(opts: {
     );
   }
 
-  const url = data.url.startsWith("http") ? data.url : `https://${data.url}`;
+  const id = data.id || "";
+  const ready = id
+    ? await waitForDeploymentReady(id, opts.token, opts.teamId)
+    : data;
+  const urlRaw = ready.url || data.url;
+  const url = urlRaw.startsWith("http") ? urlRaw : `https://${urlRaw}`;
   return {
-    id: data.id || "",
+    id,
     url,
-    inspectorUrl: data.inspectorUrl,
+    inspectorUrl: ready.inspectorUrl || data.inspectorUrl,
   };
+}
+
+type DeploymentStatus = {
+  url?: string;
+  inspectorUrl?: string;
+  readyState?: string;
+  errorMessage?: string;
+  error?: { message?: string };
+};
+
+async function waitForDeploymentReady(
+  id: string,
+  token: string,
+  teamId?: string,
+): Promise<DeploymentStatus> {
+  const started = Date.now();
+  while (Date.now() - started < 150_000) {
+    const res = await fetch(
+      `https://api.vercel.com/v13/deployments/${encodeURIComponent(id)}${teamQuery(teamId)}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      },
+    );
+    const data = (await res.json()) as DeploymentStatus;
+    if (!res.ok) {
+      await new Promise((r) => setTimeout(r, 2500));
+      continue;
+    }
+    const state = (data.readyState || "").toUpperCase();
+    if (state === "READY") return data;
+    if (state === "ERROR" || state === "CANCELED") {
+      throw new Error(
+        data.errorMessage ||
+          data.error?.message ||
+          "Vercel build failed. Check the deployment logs.",
+      );
+    }
+    await new Promise((r) => setTimeout(r, 2500));
+  }
+  throw new Error("Vercel build timed out before the site was ready.");
 }
 
 export async function deployFilesToVercel(opts: {

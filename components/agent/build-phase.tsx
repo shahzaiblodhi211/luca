@@ -144,7 +144,7 @@ export function BuildPhase({
     return (
       <div className={cn("space-y-0.5", className)}>
         {phase.files.map((file) => (
-          <BuildPhase
+          <BuildPhaseRow
             key={file.path}
             defaultOpen={defaultOpen}
             phase={{
@@ -157,7 +157,7 @@ export function BuildPhase({
           />
         ))}
         {phase.commands.length > 0 ? (
-          <BuildPhase
+          <BuildPhaseRow
             defaultOpen={defaultOpen}
             phase={{
               ...phase,
@@ -171,22 +171,52 @@ export function BuildPhase({
     );
   }
 
+  return (
+    <BuildPhaseRow
+      phase={phase}
+      defaultOpen={defaultOpen}
+      className={className}
+    />
+  );
+}
+
+function BuildPhaseRow({
+  phase,
+  defaultOpen = false,
+  className,
+}: {
+  phase: BuildPhasePart;
+  defaultOpen?: boolean;
+  className?: string;
+}) {
   const doneFiles = phase.files.filter((f) => f.status === "done");
   const doneCommands = phase.commands.filter((c) => c.status === "done");
-  const creating =
+  const creatingNow =
     phase.files.some((f) => f.status === "in_progress") ||
     phase.commands.some((c) => c.status === "in_progress");
-  if (!creating && doneFiles.length === 0 && doneCommands.length === 0) {
-    return null;
-  }
-
+  const [holdCreating, setHoldCreating] = useState(creatingNow);
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (creatingNow) {
+      setHoldCreating(true);
+      return;
+    }
+    const t = setTimeout(() => setHoldCreating(false), 420);
+    return () => clearTimeout(t);
+  }, [creatingNow]);
+
+  const creating = creatingNow || holdCreating;
   const heading = phaseHeading(phase, creating);
   const hasRows = doneFiles.length > 0 || doneCommands.length > 0;
 
   useEffect(() => {
     if (!creating && hasRows && defaultOpen) setOpen(true);
   }, [creating, hasRows, defaultOpen]);
+
+  if (!creating && doneFiles.length === 0 && doneCommands.length === 0) {
+    return null;
+  }
 
   if (creating) {
     return (

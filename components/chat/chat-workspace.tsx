@@ -47,6 +47,7 @@ import type {
   EnvRequestPart,
   ProjectFile,
 } from "@/lib/types";
+import { placeFileOnPhases } from "@/lib/agent/build-timeline";
 import { cn } from "@/lib/utils";
 import { PanelRight } from "lucide-react";
 import { PanelResizer } from "./panel-resizer";
@@ -252,28 +253,17 @@ function applyLiveEvent(prev: LiveState, event: AgentStreamEvent): LiveState {
         parts: ensurePhasePart(prev.parts, event.id, event.text),
       };
     case "file": {
-      const phaseId = latestPhaseId(prev.parts, event.phaseId);
-      let parts = ensurePhasePart(
+      const parts = placeFileOnPhases(
         prev.parts,
-        phaseId,
-        "Building project files",
-      );
-      parts = parts.map((p) => {
-        if (p.type !== "phase" || p.id !== phaseId) return p;
-        const idx = p.files.findIndex((f) => f.path === event.path);
-        const item = {
+        {
           path: event.path,
           action: event.action,
           status: event.status,
           language: event.language,
           linesDelta: event.linesDelta,
-        };
-        const files =
-          idx >= 0
-            ? p.files.map((f, i) => (i === idx ? { ...f, ...item } : f))
-            : [...p.files, item];
-        return { ...p, files };
-      });
+        },
+        event.phaseId,
+      );
       const projectFiles =
         event.action === "delete" && event.status === "done"
           ? prev.projectFiles.filter((f) => f.path !== event.path)
@@ -861,6 +851,11 @@ export function ChatWorkspace({
 
           patchLive((prev) => applyLiveEvent(prev, event));
           if (
+            event.type === "file" &&
+            event.status === "in_progress"
+          ) {
+            await new Promise((r) => setTimeout(r, 90));
+          } else if (
             event.type === "text_delta" ||
             event.type === "thinking_delta" ||
             event.type === "thinking" ||

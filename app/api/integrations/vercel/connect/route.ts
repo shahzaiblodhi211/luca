@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import {
-  buildVercelAuthUrl,
   buildVercelIntegrationInstallUrl,
   isVercelIntegrationConfigured,
   isVercelOAuthConfigured,
@@ -27,25 +26,17 @@ export async function GET(req: Request) {
     return NextResponse.redirect(dest);
   }
 
-  const redirectUri = vercelOAuthRedirectUri(url.origin);
-  if (isVercelIntegrationConfigured()) {
-    const started = await setVercelOAuthState(
-      returnTo,
-      redirectUri,
-      "integration",
-    );
-    return NextResponse.redirect(
-      buildVercelIntegrationInstallUrl(started.state),
-    );
+  if (!isVercelIntegrationConfigured()) {
+    const dest = new URL(returnTo, url.origin);
+    dest.searchParams.set("vercel_error", "missing_slug");
+    return NextResponse.redirect(dest);
   }
 
-  const started = await setVercelOAuthState(returnTo, redirectUri, "signin");
-  return NextResponse.redirect(
-    buildVercelAuthUrl({
-      state: started.state,
-      redirectUri,
-      codeChallenge: started.codeChallenge,
-      nonce: started.nonce,
-    }),
+  const redirectUri = vercelOAuthRedirectUri(url.origin);
+  const started = await setVercelOAuthState(
+    returnTo,
+    redirectUri,
+    "integration",
   );
+  return NextResponse.redirect(buildVercelIntegrationInstallUrl(started.state));
 }

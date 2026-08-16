@@ -26,8 +26,9 @@ import {
   workspaceExists,
 } from "@/lib/preview/paths";
 import {
+  matchPublicPreviewPath,
   previewBasePathForChat,
-  previewPathPrefix,
+  rewritePreviewUpstreamPath,
 } from "@/lib/preview/public-url";
 
 const PORT = Number(process.env.PREVIEW_WORKER_PORT ?? 3001);
@@ -114,7 +115,6 @@ function proxyToPreviewPort(
   res: ServerResponse,
   port: number,
   chatId: string,
-  restPath: string,
   search: string,
 ) {
   const headers = { ...req.headers, host: `127.0.0.1:${port}` };
@@ -122,7 +122,7 @@ function proxyToPreviewPort(
     {
       hostname: "127.0.0.1",
       port,
-      path: `${restPath || "/"}${search}`,
+      path: `${rewritePreviewUpstreamPath(req.url?.split("?")[0] || "/", chatId)}${search}`,
       method: req.method,
       headers,
     },
@@ -189,22 +189,21 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    const prefix = previewPathPrefix().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const previewImages = pathname.match(
-      new RegExp(`^${prefix}/([a-zA-Z0-9_-]{1,64})/api/images/(.+)$`),
-    );
-    if (previewImages) {
-      proxyToLucaApp(req, res, `/api/images/${previewImages[2]}${url.search}`);
+    const previewImages = matchPublicPreviewPath(pathname);
+    if (previewImages?.rest.startsWith("/api/images/")) {
+      proxyToLucaApp(
+        req,
+        res,
+        `/api/images/${previewImages.rest.slice("/api/images/".length)}${url.search}`,
+      );
       return;
     }
 
-    const previewProxy = pathname.match(
-      new RegExp(`^${prefix}/([a-zA-Z0-9_-]{1,64})(/.*)?$`),
-    );
+    const previewProxy = matchPublicPreviewPath(pathname);
     if (previewProxy) {
       let chatId: string;
       try {
-        chatId = sanitizeChatId(previewProxy[1]!);
+        chatId = sanitizeChatId(previewProxy.chatId);
       } catch {
         json(res, 400, { error: "Invalid preview" });
         return;
@@ -216,14 +215,7 @@ const server = createServer(async (req, res) => {
       const server = await withLock(`preview:${chatId}`, () =>
         ensurePreviewServer(chatId),
       );
-      proxyToPreviewPort(
-        req,
-        res,
-        server.port,
-        chatId,
-        pathname,
-        url.search,
-      );
+      proxyToPreviewPort(req, res, server.port, chatId, url.search);
       return;
     }
 
@@ -270,17 +262,14 @@ const server = createServer(async (req, res) => {
 server.on("upgrade", (req, socket, head) => {
   void (async () => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "local"}`);
-    const prefix = previewPathPrefix().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const previewProxy = url.pathname.match(
-      new RegExp(`^${prefix}/([a-zA-Z0-9_-]{1,64})(/.*)?$`),
-    );
+    const previewProxy = matchPublicPreviewPath(url.pathname);
     if (!previewProxy) {
       socket.destroy();
       return;
     }
     let chatId: string;
     try {
-      chatId = sanitizeChatId(previewProxy[1]!);
+      chatId = sanitizeChatId(previewProxy.chatId);
     } catch {
       socket.destroy();
       return;
@@ -292,6 +281,7 @@ server.on("upgrade", (req, socket, head) => {
     const server = await withLock(`preview:${chatId}`, () =>
       ensurePreviewServer(chatId),
     );
+    req.url = `${rewritePreviewUpstreamPath(url.pathname, chatId)}${url.search}`;
     wsProxy.ws(
       req,
       socket,
