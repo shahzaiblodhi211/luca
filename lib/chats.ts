@@ -27,7 +27,7 @@ import { cleanupChatPreview } from "./preview/cleanup-chat";
 function toChatSummary(d: {
   _id: string;
   title: string;
-  projectId?: string;
+  projectId?: string | null;
   files?: unknown;
   createdAt: Date;
   updatedAt: Date;

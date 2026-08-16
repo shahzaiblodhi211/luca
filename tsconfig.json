@@ -35,6 +35,7 @@
     ".preview-runtime",
     ".preview-workspaces",
     "services/preview-worker",
-    "scripts"
+    "scripts",
+    "tmp-shane-review"
   ]
 }
