@@ -12,4 +12,40 @@ export type PublicBilling = {
   creditsRemainingToday: number;
   periodLabel: string;
   billingExempt: boolean;
+  figmaEnabled: boolean;
+  monthlyFigmaImports: number;
+  figmaImportsUsed: number;
+  figmaImportsRemaining: number;
+};
+
+export type BillingInvoice = {
+  id: string;
+  date: string;
+  description: string;
+  status: string;
+  amount: number;
+  currency: string;
+  invoiceNumber: string | null;
+};
+
+export type BillingSubscription = {
+  id: string;
+  status: string;
+  cancelAtPeriodEnd: boolean;
+  currentPeriodStart: string;
+  currentPeriodEnd: string;
+};
+
+export type BillingPaymentMethod = {
+  brand: string;
+  last4: string;
+  expMonth: number;
+  expYear: number;
+};
+
+export type BillingOverview = {
+  billing: PublicBilling;
+  subscription: BillingSubscription | null;
+  invoices: BillingInvoice[];
+  paymentMethod: BillingPaymentMethod | null;
 };

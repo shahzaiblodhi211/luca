@@ -12,6 +12,7 @@ export type PlanDefinition = {
   modelLabel: string;
   monthlyCredits: number;
   dailyCredits: number;
+  monthlyFigmaImports: number;
   maxThinkingLevel: ThinkingLevel;
   popular?: boolean;
   features: string[];
@@ -27,6 +28,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
     modelLabel: LUCA_SPARK,
     monthlyCredits: 120,
     dailyCredits: 10,
+    monthlyFigmaImports: 0,
     maxThinkingLevel: "LOW",
     features: [
       `${LUCA_SPARK} builder`,
@@ -34,7 +36,6 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
       "Up to 10 credits / day",
       "Code preview & live projects",
       "Image attachments (standard limits)",
-      "AI image generation",
       "Thinking: Minimal & Low",
     ],
   },
@@ -42,41 +43,45 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
     id: "plus",
     name: "Plus",
     priceMonthlyUsd: 20,
-    tagline: "Faster model and room for daily building.",
-    model: "gemini-3.5-flash",
+    tagline: "Faster model, Figma import, and room for daily building.",
+    model: "gemini-3.6-flash",
     modelLabel: LUCA_TURBO,
     monthlyCredits: 600,
     dailyCredits: 30,
+    monthlyFigmaImports: 30,
     maxThinkingLevel: "MEDIUM",
     popular: true,
     features: [
       "Everything in Free",
       `${LUCA_TURBO} builder`,
+      "Figma import — files, frames, FigJam, Slides & Make",
+      "30 Figma imports / month",
       "600 builder credits / month",
       "Up to 30 credits / day",
       "Thinking up to Medium",
       "Higher attachment limits",
-      "Faster builder responses",
     ],
   },
   pro: {
     id: "pro",
     name: "Pro",
     priceMonthlyUsd: 60,
-    tagline: "Best model and highest limits for power users.",
-    model: "gemini-3.6-flash",
+    tagline: "Best model, full Figma access, and highest limits.",
+    model: "gemini-3.7-flash",
     modelLabel: LUCA_ULTRA,
     monthlyCredits: 2000,
     dailyCredits: 80,
+    monthlyFigmaImports: 100,
     maxThinkingLevel: "HIGH",
     features: [
       "Everything in Plus",
       `${LUCA_ULTRA} builder`,
+      "Full Figma access",
+      "100 Figma imports / month",
       "2,000 builder credits / month",
       "Up to 80 credits / day",
       "Thinking up to High",
       "Largest attachments & exports",
-      "Early access to new agent tools",
     ],
   },
 };
@@ -122,4 +127,8 @@ export function canUseThinkingLevelForPlan(
 
 export function maxThinkingLevelForPlan(planId: PlanId): ThinkingLevel {
   return getPlan(planId).maxThinkingLevel;
+}
+
+export function canUseFigmaForPlan(planId: PlanId): boolean {
+  return getPlan(planId).monthlyFigmaImports > 0;
 }

@@ -68,10 +68,21 @@ const lines: string[] = [
   `GEMINI_MODEL=${local.GEMINI_MODEL ?? "gemini-3.5-flash-lite"}`,
   `GEMINI_THINKING_LEVEL=${local.GEMINI_THINKING_LEVEL ?? "HIGH"}`,
   "",
+  // Stock-only image pipeline — Pexels is the single image source
+  `PEXELS_API_KEY=${local.PEXELS_API_KEY ?? ""}`,
   `IMAGE_PROVIDER=${local.IMAGE_PROVIDER ?? "auto"}`,
-  `GEMINI_IMAGE_MODEL=${local.GEMINI_IMAGE_MODEL ?? "gemini-3.1-flash-lite-image"}`,
-  local.PEXELS_API_KEY ? `PEXELS_API_KEY=${local.PEXELS_API_KEY}` : "",
-  `POLLINATIONS_MODEL=${local.POLLINATIONS_MODEL ?? "flux"}`,
+  ...(local.GEMINI_IMAGE_MODEL?.trim()
+    ? [`GEMINI_IMAGE_MODEL=${local.GEMINI_IMAGE_MODEL}`]
+    : []),
+  ...(local.POLLINATIONS_MODEL?.trim()
+    ? [`POLLINATIONS_MODEL=${local.POLLINATIONS_MODEL}`]
+    : []),
+  ...(local.FIGMA_CLIENT_ID?.trim() && local.FIGMA_CLIENT_SECRET?.trim()
+    ? [
+        `FIGMA_CLIENT_ID=${local.FIGMA_CLIENT_ID}`,
+        `FIGMA_CLIENT_SECRET=${local.FIGMA_CLIENT_SECRET}`,
+      ]
+    : []),
   "",
 ];
 
@@ -145,15 +156,20 @@ if (polarKeys.some((k) => local[k]?.trim())) {
   }
 }
 
-lines.push(
-  "",
-  "PREVIEW_WORKER_URL=https://preview.lucaai.app",
-  "NEXT_PUBLIC_PREVIEW_ORIGIN=https://preview.lucaai.app",
-  "",
-  "# Optional billing (when Stripe is wired)",
-  "# STRIPE_SECRET_KEY=",
-  "",
-);
+if (process.env.INCLUDE_PREVIEW_WORKER === "1") {
+  lines.push(
+    "",
+    "PREVIEW_WORKER_URL=https://preview.lucaai.app",
+    "NEXT_PUBLIC_PREVIEW_ORIGIN=https://preview.lucaai.app",
+  );
+} else {
+  lines.push(
+    "",
+    "# Preview worker (Phase 2) — unset until preview.lucaai.app is live",
+    "# PREVIEW_WORKER_URL=https://preview.lucaai.app",
+    "# NEXT_PUBLIC_PREVIEW_ORIGIN=https://preview.lucaai.app",
+  );
+}
 
 writeFileSync(outPath, lines.join("\n"), "utf8");
 console.log(`Wrote ${outPath}`);

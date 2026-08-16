@@ -16,7 +16,7 @@ import {
 } from "./paths";
 import { patchWorkspacePreviewBasePath } from "./layout-preview-base";
 import {
-  previewBasePathForPort,
+  previewBasePathForChat,
   previewInternalOrigin,
   previewReadyCheckUrl,
 } from "./public-url";
@@ -42,6 +42,7 @@ type PersistedServer = {
   port: number;
   pid: number;
   startedAt: number;
+  basePath?: string | null;
 };
 
 const servers = new Map<string, Managed>();
@@ -123,9 +124,13 @@ async function httpAlive(url: string, timeoutMs = 1500): Promise<boolean> {
   }
 }
 
-async function waitForReady(port: number, timeoutMs = 120_000): Promise<void> {
+async function waitForReady(
+  port: number,
+  chatId: string,
+  timeoutMs = 120_000,
+): Promise<void> {
   const start = Date.now();
-  const url = previewReadyCheckUrl(port);
+  const url = previewReadyCheckUrl(port, chatId);
   while (Date.now() - start < timeoutMs) {
     if (await httpAlive(url, 3000)) return;
     await new Promise((r) => setTimeout(r, 500));
@@ -247,7 +252,7 @@ async function startProcess(
 ): Promise<Managed> {
   const cwd = workspaceDirFor(chatId);
   const bin = nextBinPath();
-  const previewBasePath = previewBasePathForPort(port);
+  const previewBasePath = previewBasePathForChat(chatId);
   await patchWorkspacePreviewBasePath(chatId, previewBasePath);
 
   const child = spawn(
@@ -295,7 +300,7 @@ async function startProcess(
   servers.set(chatId, managed);
 
   try {
-    await waitForReady(port);
+    await waitForReady(port, chatId);
     managed.info.status = "ready";
     if (managed.info.pid) {
       writePersisted({
@@ -303,6 +308,7 @@ async function startProcess(
         port,
         pid: managed.info.pid,
         startedAt: managed.info.startedAt,
+        basePath: previewBasePath,
       });
     }
     return managed;
@@ -371,31 +377,34 @@ export async function ensurePreviewServer(
     servers.delete(id);
   }
 
-  // After parent HMR, Map is empty but orphan next-dev may still be alive.
-  // With public preview URL, never reattach — old dev may lack basePath / env.
-  const usePublicPreview = Boolean(process.env.PREVIEW_PUBLIC_ORIGIN?.trim());
   if (!opts?.restart) {
     const persisted = readPersisted(id);
     if (persisted) {
-      const url = previewLoopbackUrl(persisted.port);
-      if (await httpAlive(url)) {
-        if (!usePublicPreview) {
+      const expectedBase = previewBasePathForChat(id);
+      const url = previewReadyCheckUrl(persisted.port, id);
+      const loopback = previewLoopbackUrl(persisted.port);
+      const alive =
+        (await httpAlive(url)) || (await httpAlive(loopback));
+      if (alive) {
+        const sameBase =
+          (persisted.basePath ?? null) === (expectedBase ?? null);
+        if (sameBase) {
           const info: PreviewServerInfo = {
             chatId: id,
             port: persisted.port,
-            url,
+            url: loopback,
             pid: persisted.pid,
             status: "ready",
             startedAt: persisted.startedAt,
           };
           servers.set(id, { info, child: null, logs: [] });
           console.info(
-            `[preview] reattached orphan :${persisted.port} pid=${persisted.pid}`,
+            `[preview] reattached ${id} :${persisted.port} pid=${persisted.pid}`,
           );
           return info;
         }
         console.info(
-          `[preview] killing stale public-preview dev :${persisted.port} pid=${persisted.pid}`,
+          `[preview] restarting ${id} — preview URL path changed`,
         );
         await killPid(persisted.pid);
         clearPersisted(id);

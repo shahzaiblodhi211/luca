@@ -6,7 +6,7 @@ export function applyImageDataUrlsToCode(
   if (!imageDataUrls || !Object.keys(imageDataUrls).length) return code;
   let next = code;
   for (const [assetPath, dataUrl] of Object.entries(imageDataUrls)) {
-    if (!dataUrl || dataUrl.startsWith("http")) continue;
+    if (!dataUrl) continue;
     const variants = [
       assetPath,
       assetPath.replace(/^\//, ""),

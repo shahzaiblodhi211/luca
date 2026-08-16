@@ -1,3 +1,4 @@
+import { Polar } from "@polar-sh/sdk";
 import type { PlanId } from "@/lib/billing/plans";
 
 export type PolarServer = "sandbox" | "production";
@@ -37,4 +38,13 @@ export function planIdForPolarProduct(productId: string): PlanId | null {
 
 export function polarCheckoutEnabled(): boolean {
   return polarConfigured() && Boolean(polarProductIdForPlan("plus"));
+}
+
+export function getPolarClient(): Polar | null {
+  const accessToken = polarAccessToken();
+  if (!accessToken) return null;
+  return new Polar({
+    accessToken,
+    server: polarServer(),
+  });
 }

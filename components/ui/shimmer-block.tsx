@@ -4,16 +4,28 @@ import { cn } from "@/lib/utils";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 
 /** Animated block placeholder — use while content or previews load. */
-export function ShimmerBlock({ className }: { className?: string }) {
+export function ShimmerBlock({
+  className,
+  tone = "dark",
+}: {
+  className?: string;
+  tone?: "dark" | "light";
+}) {
   return (
     <div
       className={cn(
-        "relative overflow-hidden bg-zinc-900/90",
+        "relative overflow-hidden",
+        tone === "light" ? "bg-zinc-200/80" : "bg-zinc-900/90",
         className,
       )}
       aria-hidden
     >
-      <div className="luca-shimmer-sweep absolute inset-0" />
+      <div
+        className={cn(
+          "absolute inset-0",
+          tone === "light" ? "luca-shimmer-sweep-light" : "luca-shimmer-sweep",
+        )}
+      />
     </div>
   );
 }

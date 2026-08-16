@@ -1,0 +1,140 @@
+import {
+  ensureUseClientDirective,
+  sanitizeGeneratedCode,
+} from "@/lib/agent/sanitize-code";
+import type { ProjectFile } from "@/lib/types";
+import { resolvePreviewDependencies } from "./deps";
+import { isHostOwnedPreviewPath, normalizePreviewCss } from "./normalize-css";
+import { isNextConfigPath } from "./next-config-merge";
+import {
+  resolveNextUiStubFiles,
+  SCAFFOLD_GITIGNORE,
+  SCAFFOLD_GLOBALS_CSS,
+  SCAFFOLD_LAYOUT,
+  SCAFFOLD_POSTCSS,
+  SCAFFOLD_THEME_PROVIDER,
+  SCAFFOLD_TSCONFIG,
+  SCAFFOLD_UTILS,
+} from "./scaffold";
+
+const PUBLISH_NEXT_CONFIG = `import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  images: { unoptimized: true },
+};
+
+export default nextConfig;
+`;
+
+function normalizePath(p: string): string {
+  return p.replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+export type VercelDeployFile = {
+  file: string;
+  data: string;
+  encoding?: "base64" | "utf-8";
+};
+
+export function buildPublishFiles(
+  files: ProjectFile[],
+  packages: Record<string, string> = {},
+  imageDataUrls: Record<string, string> = {},
+): VercelDeployFile[] {
+  const byPath = new Map<string, string>();
+  byPath.set("lib/utils.ts", SCAFFOLD_UTILS);
+  byPath.set("components/theme-provider.tsx", SCAFFOLD_THEME_PROVIDER);
+  byPath.set("app/globals.css", SCAFFOLD_GLOBALS_CSS);
+  byPath.set("app/layout.tsx", SCAFFOLD_LAYOUT);
+  byPath.set("tsconfig.json", SCAFFOLD_TSCONFIG);
+  byPath.set("postcss.config.mjs", SCAFFOLD_POSTCSS);
+  byPath.set("next.config.ts", PUBLISH_NEXT_CONFIG);
+  byPath.set(".gitignore", SCAFFOLD_GITIGNORE);
+  byPath.set(
+    "vercel.json",
+    `${JSON.stringify({ framework: "nextjs" }, null, 2)}\n`,
+  );
+
+  const allCode = files.map((f) => f.code).join("\n");
+  for (const [p, code] of Object.entries(resolveNextUiStubFiles(allCode))) {
+    byPath.set(p, code);
+  }
+
+  for (const file of files) {
+    const p = normalizePath(file.path);
+    if (isHostOwnedPreviewPath(p)) continue;
+    if (p === "public/luca-inspector.js") continue;
+    if (isNextConfigPath(p)) {
+      byPath.set(p, PUBLISH_NEXT_CONFIG);
+      continue;
+    }
+    let code = file.code;
+    if (/\.(tsx?|jsx?)$/i.test(p)) {
+      code = sanitizeGeneratedCode(code)
+        .replace(
+          /from\s+["']next-themes["']/g,
+          'from "@/components/theme-provider"',
+        )
+        .replace(
+          /from\s+["']@teispace\/next-themes["']/g,
+          'from "@/components/theme-provider"',
+        );
+      const isRootLayout = p === "app/layout.tsx" || /(^|\/)layout\.tsx$/i.test(p);
+      if (!isRootLayout) code = ensureUseClientDirective(code);
+    } else if (/\.css$/i.test(p)) {
+      code = normalizePreviewCss(sanitizeGeneratedCode(file.code));
+    }
+    byPath.set(p, code);
+  }
+
+  byPath.set("components/theme-provider.tsx", SCAFFOLD_THEME_PROVIDER);
+  byPath.set("postcss.config.mjs", SCAFFOLD_POSTCSS);
+  byPath.set("next.config.ts", PUBLISH_NEXT_CONFIG);
+
+  let layout = byPath.get("app/layout.tsx") || SCAFFOLD_LAYOUT;
+  layout = layout.replace(/<script[^>]*luca-inspector[\s\S]*?<\/script>/gi, "");
+  if (!layout.includes("globals.css")) {
+    layout = `import "./globals.css";\n${layout}`;
+  }
+  byPath.set("app/layout.tsx", layout);
+
+  const globals = byPath.get("app/globals.css");
+  if (globals) byPath.set("app/globals.css", normalizePreviewCss(globals));
+
+  const deps = resolvePreviewDependencies(files, packages);
+  byPath.set(
+    "package.json",
+    `${JSON.stringify(
+      {
+        name: "luca-site",
+        private: true,
+        version: "0.0.0",
+        scripts: {
+          build: "next build",
+          start: "next start",
+        },
+        dependencies: deps,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  const out: VercelDeployFile[] = [];
+  for (const [file, data] of byPath) {
+    out.push({ file, data });
+  }
+
+  for (const [imgPath, dataUrl] of Object.entries(imageDataUrls)) {
+    const m = /^data:([^;]+);base64,([\s\S]+)$/.exec(dataUrl);
+    if (!m) continue;
+    const rel = normalizePath(imgPath);
+    const file =
+      rel.startsWith("public/") || rel.startsWith("app/")
+        ? rel
+        : `public/${rel.replace(/^\/+/, "")}`;
+    out.push({ file, data: m[2], encoding: "base64" });
+  }
+
+  return out;
+}

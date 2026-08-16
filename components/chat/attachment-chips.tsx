@@ -12,6 +12,10 @@ function isCloneScreenshot(file: ChatAttachment) {
   return file.kind === "image" && /^clone-screenshot/i.test(file.name);
 }
 
+function isFigmaScreenshot(file: ChatAttachment) {
+  return isCloneScreenshot(file) && /figma/i.test(file.name);
+}
+
 function toAttachmentData(file: ChatAttachment): AttachmentData {
   return {
     id: file.id,
@@ -49,7 +53,9 @@ export function AttachmentChips({
         >
           <div className="flex items-center justify-between gap-2 border-b border-sky-500/20 px-3 py-2">
             <span className="text-[11px] font-medium uppercase tracking-wider text-sky-300">
-              Full page we&apos;re cloning
+              {isFigmaScreenshot(file)
+                ? "Figma we’re matching"
+                : "Full page we’re cloning"}
             </span>
             <span className="truncate text-[11px] text-sky-200/70">
               Scroll to see every section · open for full size
@@ -59,13 +65,18 @@ export function AttachmentChips({
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={file.url}
-              alt="Full-page screenshot of the site being cloned"
+              alt={
+                isFigmaScreenshot(file)
+                  ? "Figma frame Luca must match"
+                  : "Full-page screenshot of the site being cloned"
+              }
               className="w-full object-contain object-top"
             />
           </div>
           <p className="px-3 py-2 text-[12px] leading-snug text-sky-100/80">
-            Scroll this image — Luca AI must clone the entire page (not only the
-            hero).
+            {isFigmaScreenshot(file)
+              ? "Luca AI must match this Figma file — layout, type, and color."
+              : "Scroll this image — Luca AI must clone the entire page (not only the hero)."}
           </p>
         </a>
       ))}

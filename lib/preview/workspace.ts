@@ -41,7 +41,7 @@ function lucaAppOrigin(override?: string): string {
     override?.trim() ||
     process.env.LUCA_APP_ORIGIN?.trim() ||
     process.env.NEXT_PUBLIC_APP_URL?.trim() ||
-    ""
+    (process.env.NODE_ENV !== "production" ? "http://localhost:3000" : "")
   ).replace(/\/+$/, "");
 }
 
@@ -53,6 +53,14 @@ function rewriteLucaImageApiUrls(code: string, originOverride?: string): string 
   next = next.replace(/url\(\s*\/api\/images\//g, `url(${origin}/api/images/`);
   next = next.replace(/url\(\s*['"]\/api\/images\//g, (m) =>
     m.replace("/api/images/", `${origin}/api/images/`),
+  );
+  next = next.replace(
+    /(["'`])\/api\/attachments\//g,
+    `$1${origin}/api/attachments/`,
+  );
+  next = next.replace(
+    /url\(\s*\/api\/attachments\//g,
+    `url(${origin}/api/attachments/`,
   );
   return next;
 }
@@ -154,6 +162,59 @@ async function materializeLucaApiImages(
     let next = code;
     for (const [id, publicPath] of idToPublic) {
       next = next.replaceAll(`/api/images/${id}`, publicPath);
+    }
+    byPath.set(p, next);
+  }
+}
+
+const API_ATTACH_ID = /\/api\/attachments\/([A-Za-z0-9_-]+)/g;
+
+async function materializeLucaAttachments(
+  byPath: Map<string, string>,
+  dir: string,
+  originOverride?: string,
+): Promise<void> {
+  const origin = lucaAppOrigin(originOverride);
+  if (!origin) return;
+
+  const ids = new Set<string>();
+  for (const code of byPath.values()) {
+    for (const m of code.matchAll(new RegExp(API_ATTACH_ID.source, "g"))) {
+      ids.add(m[1]!);
+    }
+  }
+  if (!ids.size) return;
+
+  const idToPublic = new Map<string, string>();
+  for (const id of ids) {
+    try {
+      const res = await fetch(`${origin}/api/attachments/${id}`, {
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!res.ok) continue;
+      const ct = res.headers.get("content-type") || "image/png";
+      const ext = ct.includes("jpeg")
+        ? "jpg"
+        : ct.includes("webp")
+          ? "webp"
+          : ct.includes("svg")
+            ? "svg"
+            : "png";
+      const rel = `public/luca-attachments/${id}.${ext}`;
+      const buf = Buffer.from(await res.arrayBuffer());
+      await writeBinary(path.join(dir, rel), buf);
+      idToPublic.set(id, `/${rel.replace(/^public\//, "")}`);
+    } catch {
+      /* keep remote attachment URL */
+    }
+  }
+
+  for (const [p, code] of byPath.entries()) {
+    if (!/\.(tsx?|jsx?|css|html)$/i.test(p)) continue;
+    let next = code;
+    for (const [id, publicPath] of idToPublic) {
+      next = next.replaceAll(`${origin}/api/attachments/${id}`, publicPath);
+      next = next.replaceAll(`/api/attachments/${id}`, publicPath);
     }
     byPath.set(p, next);
   }
@@ -436,6 +497,7 @@ export async function syncPreviewWorkspace(
   }
 
   await materializeLucaApiImages(byPath, dir, lucaOrigin);
+  await materializeLucaAttachments(byPath, dir, lucaOrigin);
 
   for (const [rel, code] of byPath) {
     await writeText(path.join(dir, rel), code);

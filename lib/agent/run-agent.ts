@@ -33,12 +33,23 @@ import {
 import {
   createAgentState,
   executeAgentTool,
+  isFigmaCanvasLockedPath,
   type AgentState,
 } from "./tools";
 import { sanitizeGeneratedCode } from "@/lib/agent/sanitize-code";
 import { chunkForStream, emitPacedText } from "@/lib/agent/pace-text";
-import { ensurePhaseOnTimeline } from "@/lib/agent/build-timeline";
+import {
+  narrationForBuildStep,
+  narrationForToolCall,
+  stepHasBuildWork,
+} from "@/lib/agent/build-narration";
+import {
+  ensurePhaseOnTimeline,
+  upsertPhaseFile,
+} from "@/lib/agent/build-timeline";
+import { phaseLabelForFile } from "@/lib/agent/pretty-file-label";
 import type { ProjectFile } from "@/lib/types";
+import { filesHaveFigmaCanvas } from "@/lib/figma-canvas";
 
 const MAX_STEPS = 100;
 
@@ -95,6 +106,7 @@ async function callModelStream(
   handlers: StreamHandlers,
   thinkingLevel?: string | null,
   useAgentTools = true,
+  figmaBuild = false,
 ): Promise<GeminiStreamResult> {
   console.info(`[agent] provider=gemini model=${getGeminiModel()}`);
 
@@ -140,7 +152,7 @@ async function callModelStream(
         contents,
         handlers,
         thinkingLevel,
-        { useAgentTools },
+        { useAgentTools, figmaBuild },
       );
       console.info(`[agent] gemini key#${keyIndex + 1} stream ok`);
       // Stick to this key; soft-rotate before ~15 RPM burns one free-tier key
@@ -185,22 +197,65 @@ async function callModelStream(
   throw new Error(formatGeminiUserError(lastError));
 }
 
+function latestUserText(turns: ChatTurn[]): string {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    if (turns[i].role === "user") return turns[i].content || "";
+  }
+  return "";
+}
+
+function figmaBlockedReply(turns: ChatTurn[]): string {
+  const text = latestUserText(turns);
+  if (/FIGMA_NEEDS_CONNECT:\s*1/i.test(text)) {
+    return "I can't open that Figma file yet. Connect Figma from the account menu, then send the frame link again (it should include node-id).";
+  }
+  if (/FIGMA_TOKEN_INVALID:\s*1/i.test(text)) {
+    return "Figma rejected the connected account token. In Figma → My apps, publish the Luca OAuth app (Private is fine — Draft tokens don't work). Then disconnect Figma in the account menu, connect again, and resend the frame link.";
+  }
+  if (/FIGMA_PLAN_REQUIRED:\s*1/i.test(text)) {
+    return "Figma import is on Plus and Pro. Upgrade from Plans & billing, then send the frame link again.";
+  }
+  const handle =
+    text.match(/logged in as (@[\w.-]+)/i)?.[1] ||
+    text.match(/invite (@[\w.-]+)/i)?.[1];
+  const who = handle || "the Figma account connected to Luca";
+  return `Figma accepted the login but denied this file. Open it while logged in as ${who}, then Share → invite ${who} as Viewer. Link-only share is not enough. If your OAuth app is Private, the file has to live on that same Figma team. Then send the frame link again.`;
+}
+
 function seedStateFromTurns(turns: ChatTurn[], state: AgentState) {
+  const latest = latestUserText(turns);
+  const req = latest.match(/CLONE_REQUIRED_TOKENS:\s*(.+)/i);
+  if (req?.[1]) {
+    state.cloneRequiredTokens = req[1]
+      .split("|")
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .slice(0, 16);
+    console.info(
+      `[agent] clone required tokens: ${state.cloneRequiredTokens.join(", ")}`,
+    );
+  }
+  if (
+    /FIGMA_NEEDS_CONNECT:\s*1/i.test(latest) ||
+    /FIGMA_ACCESS_DENIED:\s*1/i.test(latest) ||
+    /FIGMA_TOKEN_INVALID:\s*1/i.test(latest) ||
+    /FIGMA_PLAN_REQUIRED:\s*1/i.test(latest) ||
+    /# FIGMA BLOCKED/i.test(latest)
+  ) {
+    state.figmaBlocked = true;
+    state.figmaBuild = false;
+  } else if (/FIGMA_BUILD:\s*1|FIGMA_CANVAS:\s*1|FIGMA_EDIT:\s*1|FIGMA_APP:\s*1|FIGMA_PAGE:\s*1/i.test(latest)) {
+    state.figmaBuild = true;
+    const proj = latest.match(/FIGMA_PROJECT:\s*([a-z0-9-]+)/i);
+    if (proj?.[1]) state.projectId = proj[1];
+  } else if (/figma\.com\/(design|file|proto)\//i.test(latest)) {
+    // Link present but inspect never produced a readable brief — do not invent.
+    state.figmaBlocked = true;
+    state.figmaBuild = false;
+  }
+
   for (let i = turns.length - 1; i >= 0; i--) {
     const m = turns[i];
-    if (m.role === "user") {
-      const req = m.content.match(/CLONE_REQUIRED_TOKENS:\s*(.+)/i);
-      if (req?.[1]) {
-        state.cloneRequiredTokens = req[1]
-          .split("|")
-          .map((t) => t.trim())
-          .filter(Boolean)
-          .slice(0, 16);
-        console.info(
-          `[agent] clone required tokens: ${state.cloneRequiredTokens.join(", ")}`,
-        );
-      }
-    }
     if (m.role !== "assistant") continue;
     const match = m.content.match(/\[project:([^\]]+)\]/i);
     if (match?.[1]) {
@@ -288,7 +343,12 @@ async function runToolCalls(
       if (!path) return;
       const { phaseId, created } = ensurePhaseOnTimeline(
         state,
-        "Building project files",
+        phaseLabelForFile(
+          path,
+          call.name === "edit_file" || state.files.has(path)
+            ? "update"
+            : "create",
+        ),
       );
       if (created) {
         const phase = state.timeline.find(
@@ -319,7 +379,7 @@ async function runToolCalls(
       if (!path) return;
       const { phaseId, created } = ensurePhaseOnTimeline(
         state,
-        "Updating project files",
+        phaseLabelForFile(path, "delete"),
       );
       if (created) {
         const phase = state.timeline.find(
@@ -435,6 +495,9 @@ export async function streamAgentEvents(
   seedStateFromTurns(turns, state);
   seedProjectFiles(state, existingFiles);
   seedPackages(state, existingPackages);
+  if (!state.figmaBlocked && filesHaveFigmaCanvas(existingFiles)) {
+    state.figmaBuild = true;
+  }
 
   return new ReadableStream({
     async start(controller) {
@@ -453,6 +516,25 @@ export async function streamAgentEvents(
 
       try {
         const turnStartedAt = Date.now();
+
+        if (state.figmaBlocked) {
+          const msg = figmaBlockedReply(turns);
+          await emitPacedText(emit, msg);
+          if (!state.texts.includes(msg)) state.texts.push(msg);
+          if (
+            !state.timeline.some((p) => p.type === "text" && p.text === msg)
+          ) {
+            state.timeline.push({ type: "text", text: msg });
+          }
+          state.finished = true;
+          emit(buildDoneEvent(state));
+          if (!closed) {
+            controller.close();
+            closed = true;
+          }
+          return;
+        }
+
         const useAgentTools = shouldUseAgentTools(turns, existingFiles);
 
         const hasReasoningContent = () => {
@@ -514,17 +596,85 @@ export async function streamAgentEvents(
         // Only surface a project chip when files already exist (edit turn).
         // Never emit a default "project" shell on greetings / Q&A — that shows
         // an empty "Waiting for files…" card. set_project / write_file emit later.
-        if (existingFiles?.length && state.projectId) {
+        if (
+          state.figmaBuild &&
+          existingFiles?.length &&
+          !/FIGMA_EDIT:\s*1|FIGMA_APP:\s*1/i.test(latestUserText(turns))
+        ) {
+          emit({ type: "project", id: state.projectId || "project" });
+          const latest = latestUserText(turns);
+          const kind = latest.match(/FIGMA_KIND:\s*(\w+)/i)?.[1] || "home";
+          const route =
+            latest.match(/FIGMA_ROUTE:\s*(\S+)/i)?.[1] || "app/page.tsx";
+          const addedPage = /FIGMA_PAGE:\s*1/i.test(latest);
+          const { phaseId } = ensurePhaseOnTimeline(
+            state,
+            addedPage ? `Adding Figma ${kind} page` : "Building Figma canvas",
+          );
+          emit({
+            type: "phase",
+            id: phaseId,
+            text: addedPage
+              ? `Adding Figma ${kind} page`
+              : "Building Figma canvas",
+          });
+          for (const f of existingFiles) {
+            const path = f.path.replace(/^\/+/, "");
+            if (
+              addedPage &&
+              /^(app\/page\.tsx|app\/layout\.tsx|app\/globals\.css|components\/site-life\.tsx)$/i.test(
+                path,
+              )
+            ) {
+              continue;
+            }
+            const language =
+              f.language || (path.endsWith(".css") ? "css" : "tsx");
+            upsertPhaseFile(state, {
+              path,
+              action: "create",
+              status: "done",
+              language,
+            });
+            emit({
+              type: "file",
+              path,
+              action: "create",
+              status: "done",
+              phaseId,
+              language,
+              code: f.code,
+            });
+          }
+          const msg = addedPage
+            ? `Compiled this Figma frame as the ${kind} page (${route}). Home is unchanged.`
+            : kind === "product"
+              ? "Preview is the Figma product page. Home cards will open it once you paste the landing frame — or open /product from the preview."
+              : "Preview is the Figma home canvas. Product cards open /product/[slug] from the catalog. Paste a product-detail frame to compile that page — it will not replace home.";
+          state.texts.push(msg);
+          state.timeline.push({ type: "text", text: msg });
+          state.finished = true;
+          ensureThinkingOnTimeline();
+          emit(buildDoneEvent(state));
+          if (!closed) {
+            controller.close();
+            closed = true;
+          }
+          return;
+        } else if (existingFiles?.length && state.projectId) {
           emit({ type: "project", id: state.projectId });
         }
 
-        for (let step = 0; step < MAX_STEPS; step++) {
+        const maxSteps = MAX_STEPS;
+        for (let step = 0; step < maxSteps; step++) {
+          state.currentPhaseId = "";
           let streamedText = "";
           let streamedThought = "";
           let textDeltaOpen = false;
           let thoughtDeltaOpen = false;
           let thoughtSealed = false;
           let thoughtStartedAt = 0;
+          let stepNarrationEmitted = false;
           /** Hold first paragraph so meta-reasoning never streams into the chat bubble. */
           let textLeadPending = "";
           let textLeadChecked = false;
@@ -537,10 +687,28 @@ export async function streamAgentEvents(
             streamedText += delta;
             if (!textDeltaOpen) {
               textDeltaOpen = true;
+              stepNarrationEmitted = true;
               emit({ type: "text", text: "" });
             }
             for (const piece of chunkForStream(delta, 48)) {
               emit({ type: "text_delta", text: piece });
+            }
+          };
+
+          const persistStepNarration = (line: string) => {
+            const text = line.trim();
+            if (!text || stepNarrationEmitted) return;
+            stepNarrationEmitted = true;
+            streamedText = streamedText || text;
+            if (
+              !state.timeline.some((p) => p.type === "text" && p.text === text)
+            ) {
+              state.timeline.push({ type: "text", text });
+            }
+            if (!state.texts.includes(text)) state.texts.push(text);
+            if (!textDeltaOpen) {
+              void emitPacedText(emit, text);
+              textDeltaOpen = true;
             }
           };
 
@@ -676,11 +844,66 @@ export async function streamAgentEvents(
                 },
                 onFunctionCallStart: (name, args) => {
                   sealThought();
+                  if (!textLeadChecked && textLeadPending) {
+                    resolveTextLeadBuffer();
+                  }
+                  if (
+                    !stepNarrationEmitted &&
+                    (name === "phase" ||
+                      name === "write_file" ||
+                      name === "edit_file" ||
+                      name === "write_image" ||
+                      name === "delete_file" ||
+                      name === "install_package")
+                  ) {
+                    const existing = sanitizeVisibleReply(streamedText.trim());
+                    if (existing) {
+                      stepNarrationEmitted = true;
+                    } else {
+                      persistStepNarration(narrationForToolCall(name, args));
+                    }
+                  }
                   if (name === "think") {
                     void emitThinkToolPlan(
                       emit,
                       String(args.text || ""),
                     );
+                  }
+                  if (
+                    name === "write_file" ||
+                    name === "edit_file" ||
+                    name === "delete_file"
+                  ) {
+                    const path = String(args.path || "")
+                      .trim()
+                      .replace(/^\/+/, "");
+                    if (path) {
+                      const action =
+                        name === "delete_file"
+                          ? ("delete" as const)
+                          : name === "edit_file" || state.files.has(path)
+                            ? ("update" as const)
+                            : ("create" as const);
+                      const { phaseId, created } = ensurePhaseOnTimeline(
+                        state,
+                        phaseLabelForFile(path, action),
+                      );
+                      if (created) {
+                        const phase = state.timeline.find(
+                          (p) => p.type === "phase" && p.id === phaseId,
+                        );
+                        if (phase?.type === "phase") {
+                          emit({ type: "phase", id: phase.id, text: phase.text });
+                        }
+                      }
+                      emit({
+                        type: "file",
+                        path,
+                        action,
+                        status: "in_progress",
+                        phaseId,
+                      });
+                    }
                   }
                   const key = `${name}:${String(args.path || args.id || args.name || "")}`;
                   announcedToolSteps.add(key);
@@ -688,6 +911,7 @@ export async function streamAgentEvents(
               },
               thinkingLevel,
               useAgentTools,
+              state.figmaBuild,
             );
 
           if (!thoughtSealed) {
@@ -733,9 +957,30 @@ export async function streamAgentEvents(
             break;
           }
 
-          // Tool-calling turn: drop provisional narration — UI uses phase/file/command
-          if (textDeltaOpen && streamedText.trim()) {
-            // Intentionally not adding preamble text to the timeline
+          // Tool-calling turn: always show 2-line narration before a file batch.
+          {
+            const narration = sanitizeVisibleReply(
+              (streamedText || text).trim(),
+            );
+            if (narration) {
+              if (
+                !state.timeline.some(
+                  (p) => p.type === "text" && p.text === narration,
+                )
+              ) {
+                state.timeline.push({ type: "text", text: narration });
+              }
+              if (!state.texts.includes(narration)) {
+                state.texts.push(narration);
+              }
+              if (!textDeltaOpen) {
+                await emitPacedText(emit, narration);
+                textDeltaOpen = true;
+              }
+              stepNarrationEmitted = true;
+            } else if (stepHasBuildWork(functionCalls)) {
+              persistStepNarration(narrationForBuildStep(functionCalls));
+            }
           }
 
           contents.push({ role: "model", parts: parts as GeminiPart[] });
@@ -751,30 +996,47 @@ export async function streamAgentEvents(
 
           // edit_file miss loop — force write_file instead of burning keys
           if (state.editFailStreak >= 2 && state.editFailPath) {
-            const stuckPath = state.editFailPath;
-            const file = state.files.get(stuckPath);
-            contents.push({
-              role: "user",
-              parts: [
-                {
-                  text: [
-                    `SYSTEM: Stop calling edit_file on "${stuckPath}".`,
-                    `Call write_file with path="${stuckPath}" and the COMPLETE corrected file in one shot.`,
-                    file?.code
-                      ? `Current file contents:\n\`\`\`\n${file.code.slice(0, 4000)}\n\`\`\``
-                      : "",
-                  ]
-                    .filter(Boolean)
-                    .join("\n"),
-                },
-              ],
-            });
+            if (state.figmaBuild && isFigmaCanvasLockedPath(state.editFailPath)) {
+              contents.push({
+                role: "user",
+                parts: [
+                  {
+                    text: "SYSTEM: Stop editing app/page.tsx. The Figma home canvas is locked. write_file a new route if the user asked for a page, otherwise call finish now.",
+                  },
+                ],
+              });
+            } else {
+              const stuckPath = state.editFailPath;
+              const file = state.files.get(stuckPath);
+              contents.push({
+                role: "user",
+                parts: [
+                  {
+                    text: [
+                      `SYSTEM: Stop calling edit_file on "${stuckPath}".`,
+                      `Call write_file with path="${stuckPath}" and the COMPLETE corrected file in one shot.`,
+                      file?.code
+                        ? `Current file contents:\n\`\`\`\n${file.code.slice(0, 4000)}\n\`\`\``
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join("\n"),
+                  },
+                ],
+              });
+            }
           }
 
           if (state.finished) break;
         }
 
         if (!state.finished) state.finished = true;
+        state.timeline = state.timeline.filter(
+          (p) =>
+            p.type !== "phase" ||
+            p.files.some((f) => f.status === "done") ||
+            p.commands.some((c) => c.status === "done"),
+        );
         ensureThinkingOnTimeline();
         emit(buildDoneEvent(state));
 

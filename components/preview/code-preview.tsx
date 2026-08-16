@@ -7,10 +7,12 @@ import {
   Database,
   ExternalLink,
   Eye,
+  Loader2,
   MessageSquare,
   Monitor,
   MousePointer2,
   RefreshCw,
+  Rocket,
   Smartphone,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -37,6 +39,9 @@ import {
   type PreviewUrlPayload,
 } from "@/lib/preview/browser-preview-url";
 import { useShell } from "@/components/chat/shell-context";
+import { useAuthModal } from "@/components/auth/auth-context";
+import { useAuthToast } from "@/components/auth/auth-toast";
+import { openVercelConnectModal } from "@/components/preview/vercel-connect-modal";
 
 type PreviewStatus = "idle" | "syncing" | "ready" | "error";
 
@@ -107,6 +112,9 @@ export function CodePreview({
   const [applying, setApplying] = useState(false);
   const baseTextRef = useRef("");
   const { toggleSidebar } = useShell();
+  const { user, openAuth } = useAuthModal();
+  const { showToast } = useAuthToast();
+  const [publishing, setPublishing] = useState(false);
   const [status, setStatus] = useState<PreviewStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [previewMeta, setPreviewMeta] = useState<PreviewUrlPayload>({});
@@ -309,6 +317,7 @@ export function CodePreview({
         setPreviewMeta({
           url: data.url,
           port: data.port,
+          chatId,
           previewOrigin: data.previewOrigin ?? null,
           previewBasePath: data.previewBasePath ?? null,
         });
@@ -444,6 +453,56 @@ export function CodePreview({
       {icon}
     </button>
   );
+
+  async function publishToVercel() {
+    if (publishing || !canWarmPreview(files)) return;
+    if (!user) {
+      openAuth("login");
+      return;
+    }
+    if (!user.vercelConnected) {
+      openVercelConnectModal();
+      return;
+    }
+    setPublishing(true);
+    try {
+      const res = await fetch("/api/preview/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chatId,
+          files,
+          packages,
+          imageDataUrls,
+        }),
+      });
+      const data = (await res.json()) as {
+        error?: string;
+        url?: string;
+        needsConnect?: boolean;
+        needsToken?: boolean;
+      };
+      if (res.status === 409 || data.needsConnect || data.needsToken) {
+        openVercelConnectModal({ showToken: Boolean(data.needsToken) });
+        if (data.needsToken && data.error) {
+          showToast({ type: "error", message: data.error });
+        }
+        return;
+      }
+      if (!res.ok || !data.url) {
+        throw new Error(data.error || "Publish failed.");
+      }
+      showToast({ type: "success", message: "Published to Vercel." });
+      window.open(data.url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      showToast({
+        type: "error",
+        message: err instanceof Error ? err.message : "Publish failed.",
+      });
+    } finally {
+      setPublishing(false);
+    }
+  }
 
   if (!files.length) {
     return (
@@ -605,6 +664,25 @@ export function CodePreview({
             {projectId || "Code Project"} · {files.length} files
           </span>
         )}
+
+        <button
+          type="button"
+          disabled={publishing || streaming || !canWarmPreview(files)}
+          onClick={() => void publishToVercel()}
+          title={
+            user?.vercelConnected
+              ? "Publish to your Vercel"
+              : "Connect Vercel, then publish"
+          }
+          className="ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-[13px] font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {publishing ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Rocket className="h-3.5 w-3.5" />
+          )}
+          {publishing ? "Publishing…" : "Publish"}
+        </button>
       </div>
 
       <div className="flex min-h-0 flex-1 overflow-hidden">

@@ -28,6 +28,10 @@ npx tsx scripts/generate-vercel-env.mts
 | `AUTH_SECRET` | Long random string (session JWT) |
 | `NEXT_PUBLIC_APP_URL` | `https://lucaai.app` |
 | `SKIP_PLAYWRIGHT` | `1` |
+| `VERCEL_CLIENT_ID` | From **Integrations Console** (not Team Settings → Apps) |
+| `VERCEL_CLIENT_SECRET` | Integration secret |
+| `VERCEL_INTEGRATION_SLUG` | Integration URL slug — Continue with Vercel installs this |
+| `VERCEL_REDIRECT_URI` | Optional. Default `{APP}/api/integrations/vercel/callback` |
 | `GEMINI_API_KEY_1` | First Google AI key (add `_2`, `_3` … as needed) |
 
 Or set **`GEMINI_API_KEYS`** = comma-separated keys (if supported by your loader).
@@ -35,11 +39,20 @@ Or set **`GEMINI_API_KEYS`** = comma-separated keys (if supported by your loader
 | `GEMINI_MODEL` | e.g. `gemini-3.5-flash-lite` |
 | `GEMINI_THINKING_LEVEL` | e.g. `HIGH` |
 
-## Images (match your local setup)
+## Images (stock-only — no AI generation)
 
-| `IMAGE_PROVIDER` | `auto` (default), `gemini`, `pexels`, or `pollinations` |
-| `GEMINI_IMAGE_MODEL` | `gemini-3.1-flash-lite-image` (logos/illustrations) |
-| `PEXELS_API_KEY` | Free at [pexels.com/api](https://www.pexels.com/api/) — stock photos for heroes/backgrounds |
+| `PEXELS_API_KEY` | **Required.** Free at [pexels.com/api](https://www.pexels.com/api/) — all project photos are direct Pexels CDN links; logos are hand-written SVGs |
+
+## Figma (users connect, then paste a share link)
+
+Create an app at [Figma → My apps](https://www.figma.com/developers/apps).  
+**Callback URL:** `{NEXT_PUBLIC_APP_URL}/api/integrations/figma/callback`  
+(local: `http://localhost:3000/api/integrations/figma/callback`)
+
+| `FIGMA_CLIENT_ID` | OAuth client id |
+| `FIGMA_CLIENT_SECRET` | OAuth client secret |
+
+Publish the Figma OAuth app (**Private** is enough). Enable scopes: `file_content:read`, `file_metadata:read`, `current_user:read`. Draft apps return `403 Invalid token`. Users click **Connect Figma**, then paste a **frame** link (`node-id`).
 
 ## Auth email (Zoho — info@lucaai.app)
 
@@ -86,6 +99,7 @@ See [POLAR.md](./POLAR.md).
 
 | `PREVIEW_WORKER_URL` | `https://preview.lucaai.app` |
 | `NEXT_PUBLIC_PREVIEW_ORIGIN` | Same as preview host — browser iframe URLs (`https://preview.lucaai.app`) |
+| `NEXT_PUBLIC_PREVIEW_PATH_PREFIX` | `/p` — stable preview links (`https://preview.lucaai.app/p/{chatId}`) |
 | `NEXT_PUBLIC_APP_URL` | `https://www.lucaai.app` — used when proxying preview sync for `/api/images` |
 
 Leave unset for Phase 1 — chat/build works; live iframe preview returns a clear “not configured” until you add this.

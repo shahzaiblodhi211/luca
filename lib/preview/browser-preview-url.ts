@@ -1,6 +1,7 @@
 export type PreviewUrlPayload = {
   url?: string;
   port?: number;
+  chatId?: string;
   previewOrigin?: string | null;
   previewBasePath?: string | null;
 };
@@ -15,18 +16,23 @@ function clientPreviewOrigin(): string {
 
 function pathPrefix(): string {
   return (
-    process.env.NEXT_PUBLIC_PREVIEW_PATH_PREFIX?.trim() || "/_preview"
+    process.env.NEXT_PUBLIC_PREVIEW_PATH_PREFIX?.trim() || "/p"
   ).replace(/\/+$/, "");
 }
 
-function extractPort(payload: PreviewUrlPayload, raw: string): number | null {
-  if (payload.port && payload.port >= 4100 && payload.port <= 4199) {
-    return payload.port;
+function extractChatBasePath(
+  payload: PreviewUrlPayload,
+  raw: string,
+): string | null {
+  if (payload.previewBasePath?.trim()) {
+    return payload.previewBasePath.replace(/\/+$/, "");
   }
-  const fromPath = raw.match(/\/_preview\/(\d{4})/);
-  if (fromPath) return Number.parseInt(fromPath[1]!, 10);
-  const fromHost = raw.match(/:(\d{4})\/?$/);
-  if (fromHost) return Number.parseInt(fromHost[1]!, 10);
+  const prefix = pathPrefix().replace(/^\/+|\/+$/g, "");
+  const fromChat = raw.match(
+    new RegExp(`\\/${prefix}\\/([a-zA-Z0-9_-]{1,64})`),
+  );
+  if (fromChat?.[1]) return `/${prefix}/${fromChat[1]}`;
+  if (payload.chatId) return `/${prefix}/${payload.chatId}`;
   return null;
 }
 
@@ -37,18 +43,14 @@ export function resolvePreviewIframeBase(
   const raw = payload.url?.trim();
   if (!raw) return null;
 
-  const port = extractPort(payload, raw);
   const publicOrigin =
     payload.previewOrigin?.replace(/\/+$/, "") || clientPreviewOrigin();
-  const basePath =
-    payload.previewBasePath?.replace(/\/+$/, "") ||
-    (port != null && publicOrigin ? `${pathPrefix()}/${port}` : null);
+  const basePath = extractChatBasePath(payload, raw);
 
   if (publicOrigin && basePath) {
     return `${publicOrigin}${basePath}/`;
   }
 
-  // Local dev — iframe loads the loopback preview server directly
   if (/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?/i.test(raw)) {
     return raw.endsWith("/") ? raw : `${raw}/`;
   }

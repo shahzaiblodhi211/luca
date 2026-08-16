@@ -8,7 +8,11 @@ import {
   getPreviewServer,
 } from "@/lib/preview/server-manager";
 import { removePreviewWorkspace } from "@/lib/preview/cleanup-chat";
-import { withPublicPreviewUrl } from "@/lib/preview/public-url";
+import {
+  idlePublicPreviewPayload,
+  withPublicPreviewUrl,
+} from "@/lib/preview/public-url";
+import { workspaceExists } from "@/lib/preview/paths";
 import { syncPreviewWorkspace } from "@/lib/preview/workspace";
 import type { ProjectFile } from "@/lib/types";
 
@@ -61,6 +65,9 @@ export function runPreviewGet(chatId: string | null) {
   }
   const info = getPreviewServer(chatId);
   if (!info) {
+    if (workspaceExists(chatId)) {
+      return { status: 200 as const, json: idlePublicPreviewPayload(chatId) };
+    }
     return { status: 200 as const, json: { status: "idle" } };
   }
   return { status: 200 as const, json: withPublicPreviewUrl(info) };

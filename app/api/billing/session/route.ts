@@ -59,8 +59,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       planId,
-      checkoutUrl: session.url,
-      clientSecret: session.clientSecret,
+      checkout: session,
     });
   } catch (err) {
     console.error("[billing/session]", err);

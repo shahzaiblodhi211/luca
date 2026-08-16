@@ -1,7 +1,7 @@
 /**
  * Preview worker — same host as Luca (e.g. DigitalOcean).
  * - POST/GET/DELETE /api/preview
- * - GET /_preview/:port/* → loopback Next dev servers
+ * - GET /p/:chatId/* → loopback Next dev (wakes if asleep)
  *
  * Run from repo root: npm run preview-worker
  */
@@ -19,8 +19,16 @@ import {
   runPreviewPost,
   type PreviewPostBody,
 } from "@/lib/preview/run-preview-request";
-import { killAllStalePreviewDevServers } from "@/lib/preview/server-manager";
-import { previewBasePathForPort } from "@/lib/preview/public-url";
+import { ensurePreviewServer } from "@/lib/preview/server-manager";
+import { withLock } from "@/lib/preview/mutex";
+import {
+  sanitizeChatId,
+  workspaceExists,
+} from "@/lib/preview/paths";
+import {
+  previewBasePathForChat,
+  previewPathPrefix,
+} from "@/lib/preview/public-url";
 
 const PORT = Number(process.env.PREVIEW_WORKER_PORT ?? 3001);
 const HOST = process.env.PREVIEW_WORKER_HOST ?? "127.0.0.1";
@@ -87,10 +95,10 @@ function json(res: ServerResponse, status: number, body: unknown) {
 }
 
 function rewritePreviewHeaders(
-  port: number,
+  chatId: string,
   headers: IncomingMessage["headers"],
 ): IncomingMessage["headers"] {
-  const base = previewBasePathForPort(port);
+  const base = previewBasePathForChat(chatId);
   if (!base) return headers;
   const out = { ...headers };
   const loc = out.location;
@@ -105,6 +113,7 @@ function proxyToPreviewPort(
   req: IncomingMessage,
   res: ServerResponse,
   port: number,
+  chatId: string,
   restPath: string,
   search: string,
 ) {
@@ -118,7 +127,7 @@ function proxyToPreviewPort(
       headers,
     },
     (pres) => {
-      const outHeaders = rewritePreviewHeaders(port, pres.headers);
+      const outHeaders = rewritePreviewHeaders(chatId, pres.headers);
       res.writeHead(pres.statusCode ?? 502, outHeaders);
       pres.pipe(res);
     },
@@ -180,22 +189,41 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    const prefix = previewPathPrefix().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const previewImages = pathname.match(
-      /^\/_preview\/(\d+)\/api\/images\/(.+)$/,
+      new RegExp(`^${prefix}/([a-zA-Z0-9_-]{1,64})/api/images/(.+)$`),
     );
     if (previewImages) {
       proxyToLucaApp(req, res, `/api/images/${previewImages[2]}${url.search}`);
       return;
     }
 
-    const previewProxy = pathname.match(/^\/_preview\/(\d+)(\/.*)?$/);
+    const previewProxy = pathname.match(
+      new RegExp(`^${prefix}/([a-zA-Z0-9_-]{1,64})(/.*)?$`),
+    );
     if (previewProxy) {
-      const port = Number.parseInt(previewProxy[1]!, 10);
-      if (port < 4100 || port > 4199) {
-        json(res, 400, { error: "Invalid preview port" });
+      let chatId: string;
+      try {
+        chatId = sanitizeChatId(previewProxy[1]!);
+      } catch {
+        json(res, 400, { error: "Invalid preview" });
         return;
       }
-      proxyToPreviewPort(req, res, port, pathname, url.search);
+      if (!workspaceExists(chatId)) {
+        json(res, 404, { error: "Preview is not available yet." });
+        return;
+      }
+      const server = await withLock(`preview:${chatId}`, () =>
+        ensurePreviewServer(chatId),
+      );
+      proxyToPreviewPort(
+        req,
+        res,
+        server.port,
+        chatId,
+        pathname,
+        url.search,
+      );
       return;
     }
 
@@ -240,32 +268,46 @@ const server = createServer(async (req, res) => {
 });
 
 server.on("upgrade", (req, socket, head) => {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "local"}`);
-  const previewProxy = url.pathname.match(/^\/_preview\/(\d+)(\/.*)?$/);
-  if (!previewProxy) {
-    socket.destroy();
-    return;
-  }
-  const port = Number.parseInt(previewProxy[1]!, 10);
-  if (port < 4100 || port > 4199) {
-    socket.destroy();
-    return;
-  }
-  wsProxy.ws(
-    req,
-    socket,
-    head,
-    { target: `http://127.0.0.1:${port}`, changeOrigin: true },
-    (err) => {
-      console.error("[preview-worker] upgrade", err?.message);
+  void (async () => {
+    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "local"}`);
+    const prefix = previewPathPrefix().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const previewProxy = url.pathname.match(
+      new RegExp(`^${prefix}/([a-zA-Z0-9_-]{1,64})(/.*)?$`),
+    );
+    if (!previewProxy) {
       socket.destroy();
-    },
-  );
+      return;
+    }
+    let chatId: string;
+    try {
+      chatId = sanitizeChatId(previewProxy[1]!);
+    } catch {
+      socket.destroy();
+      return;
+    }
+    if (!workspaceExists(chatId)) {
+      socket.destroy();
+      return;
+    }
+    const server = await withLock(`preview:${chatId}`, () =>
+      ensurePreviewServer(chatId),
+    );
+    wsProxy.ws(
+      req,
+      socket,
+      head,
+      { target: `http://127.0.0.1:${server.port}`, changeOrigin: true },
+      (err) => {
+        console.error("[preview-worker] upgrade", err?.message);
+        socket.destroy();
+      },
+    );
+  })().catch(() => {
+    socket.destroy();
+  });
 });
 
 server.listen(PORT, HOST, () => {
   console.info(`[preview-worker] http://${HOST}:${PORT}`);
-  void killAllStalePreviewDevServers().then(() => {
-    console.info("[preview-worker] cleared stale preview dev processes");
-  });
+  console.info("[preview-worker] preview links stay up — processes reattach or wake on request");
 });

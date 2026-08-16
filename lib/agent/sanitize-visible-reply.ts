@@ -1,6 +1,6 @@
 /** Meta-planning voice — belongs in Reasoning / `think`, never in the chat bubble. */
 const LEAK_OPENERS =
-  /^(?:The user (?:wants|is asking|needs|asked|would like|has asked)|I'll (?:provide|give|start|begin|outline|explain|describe)|I will (?:provide|give|start|begin|outline|explain|describe)|Let me (?:provide|give|start|begin|outline|explain|describe)|My plan is to)/i;
+  /^(?:The user (?:wants|is asking|needs|asked|would like|has asked)|I'll (?:provide|give|outline|explain|describe)|I will (?:provide|give|outline|explain|describe)|My plan is to)/i;
 
 /** Paragraph is internal planning, not a user-facing answer. */
 export function isReasoningLeakParagraph(paragraph: string): boolean {

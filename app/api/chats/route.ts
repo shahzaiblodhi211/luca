@@ -8,21 +8,32 @@ import {
   toPublicBilling,
 } from "@/lib/billing";
 import { resolveAttachmentMetas } from "@/lib/attachments";
-import { createChat, listChats, serializeChat } from "@/lib/chats";
+import { createChat, listChats, listChatsPage, serializeChat } from "@/lib/chats";
 import { parseThinkingLevel } from "@/lib/thinking-level";
 import { resolveLucaModelTier } from "@/lib/luca-model-tier";
 import type { PlanId } from "@/lib/billing/plans";
 
 export const runtime = "nodejs";
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const user = await getSessionUser();
     if (!user) {
-      return NextResponse.json({ chats: [] });
+      return NextResponse.json({ chats: [], hasMore: false });
+    }
+    const url = new URL(req.url);
+    const limitRaw = url.searchParams.get("limit");
+    if (limitRaw) {
+      const limit = Number(limitRaw);
+      const offset = Number(url.searchParams.get("offset") || 0);
+      const page = await listChatsPage(user.id, {
+        limit: Number.isFinite(limit) ? limit : 10,
+        offset: Number.isFinite(offset) ? offset : 0,
+      });
+      return NextResponse.json(page);
     }
     const chats = await listChats(user.id);
-    return NextResponse.json({ chats });
+    return NextResponse.json({ chats, hasMore: false });
   } catch (err) {
     console.error("[chats GET]", err);
     return NextResponse.json(

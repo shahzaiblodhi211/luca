@@ -163,6 +163,15 @@ export function pickDefaultPreviewRoute(
     if (anyLogin) return anyLogin;
   }
 
-  if (paths.includes("/")) return "/";
+  if (paths.includes("/")) {
+    const home = files.find(
+      (f) => f.path.replace(/^\/+/, "") === "app/page.tsx",
+    );
+    if (home && /redirect\(\s*["'`]\/product\//.test(home.code)) {
+      const product = paths.find((p) => p.startsWith("/product"));
+      if (product) return product;
+    }
+    return "/";
+  }
   return paths[0] || "/";
 }

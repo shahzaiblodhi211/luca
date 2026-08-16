@@ -1,4 +1,5 @@
 import * as cheerio from "cheerio";
+import { extractFigmaUrls, inspectFigma, isFigmaUrl } from "./figma";
 import type { ScreenshotPalette } from "./screenshot-palette";
 import {
   cloneRequiredTokens,
@@ -81,6 +82,7 @@ export function extractUrls(text: string): string[] {
 }
 
 export function wantsCloneOrInspect(text: string): boolean {
+  if (extractFigmaUrls(text).length) return true;
   if (CLONE_RE.test(text)) return true;
   const urls = extractUrls(text);
   if (!urls.length) return false;
@@ -868,21 +870,103 @@ export type UrlEnrichment = {
     base64: string;
     label?: string;
   }>;
+  skeletonFiles?: import("./types").ProjectFile[];
+  skeletonKind?: import("./figma-frame").FigmaFrameKind;
 };
 
 export async function enrichTextWithUrlInspections(
   text: string,
+  opts?: {
+    figmaAccessToken?: string | null;
+    refreshFigmaToken?: () => Promise<string | null>;
+    figmaHandle?: string;
+    existingHome?: boolean;
+    figmaPlanAllowed?: boolean;
+    onFigmaInspectSuccess?: () => Promise<void>;
+  },
 ): Promise<UrlEnrichment> {
   const urls = extractUrls(text);
   if (!urls.length) return { text, inlineImages: [], chatImages: [] };
 
+  const figmaUrls = urls.filter(isFigmaUrl);
+  const webUrls = urls.filter((u) => !isFigmaUrl(u));
   const cloneMode = wantsCloneOrInspect(text);
+
+  const inlineImages: UrlEnrichment["inlineImages"] = [];
+  const chatImages: UrlEnrichment["chatImages"] = [];
+  const blocks: string[] = [];
+  const skeletonFiles: import("./types").ProjectFile[] = [];
+  let skeletonKind: import("./figma-frame").FigmaFrameKind | undefined;
+
+  for (const url of figmaUrls) {
+    try {
+      const figma = await inspectFigma(url, opts?.figmaAccessToken, {
+        refreshAccessToken: opts?.refreshFigmaToken,
+        figmaHandle: opts?.figmaHandle,
+        existingHome: opts?.existingHome,
+        planAllowed: opts?.figmaPlanAllowed,
+        onSuccessfulInspect: opts?.onFigmaInspectSuccess,
+      });
+      if (!figma) continue;
+      blocks.push(figma.brief);
+      if (figma.skeletonFiles?.length) {
+        skeletonFiles.push(...figma.skeletonFiles);
+      }
+      if (figma.frameKind) skeletonKind = figma.frameKind;
+      const { prepareFigmaFrameForModel } = await import("./site-screenshot");
+      for (const shot of figma.shots) {
+        try {
+          const prepared = await prepareFigmaFrameForModel(shot.base64);
+          const labeled = {
+            mimeType: prepared.mimeType,
+            base64: prepared.base64,
+            label: `${shot.label} (${prepared.width}×${prepared.height})`,
+          };
+          chatImages.push(labeled);
+          inlineImages.push(labeled);
+        } catch {
+          chatImages.push(shot);
+          inlineImages.push(shot);
+        }
+      }
+    } catch (err) {
+      console.error("[inspect-url] figma", url, err);
+    }
+  }
+
+  if (!webUrls.length) {
+    if (!blocks.length) return { text, inlineImages, chatImages };
+    const blocked = blocks.some((b) =>
+      /FIGMA_NEEDS_CONNECT:\s*1|FIGMA_ACCESS_DENIED:\s*1|FIGMA_TOKEN_INVALID:\s*1|FIGMA_PLAN_REQUIRED:\s*1|# FIGMA BLOCKED/i.test(
+        b,
+      ),
+    );
+    const planRequired = blocks.some((b) =>
+      /FIGMA_PLAN_REQUIRED:\s*1/i.test(b),
+    );
+    const shotNote =
+      !blocked && inlineImages.length
+        ? "\n\nFIGMA FRAME screenshot is vision only — do not place it in the page. Compile this frame to FIGMA_ROUTE. If FIGMA_PAGE: 1, keep the existing home canvas — do not replace app/page.tsx."
+        : blocked
+          ? planRequired
+            ? "\n\nFIGMA is on Plus and Pro. Do not build. Tell the user to upgrade, then finish."
+            : "\n\nFIGMA is not readable. Do not build. Tell the user to invite the connected Figma account as Viewer, then finish."
+          : "";
+    return {
+      text: `${text}${shotNote}\n\n${blocks.join("\n\n---\n\n")}`,
+      inlineImages,
+      chatImages,
+      skeletonFiles: skeletonFiles.length ? skeletonFiles : undefined,
+      skeletonKind,
+    };
+  }
+
   const { captureSiteScreenshot, prepareScreenshotForModel } = await import(
     "./site-screenshot"
   );
 
   const reports = await Promise.all(
-    urls.map(async (url) => {
+    webUrls.map(async (url) => {
       try {
         console.info(
           `[inspect-url] ${cloneMode ? "HOMEPAGE CLONE" : "inspect"} ${url}`,
@@ -909,10 +993,6 @@ export async function enrichTextWithUrlInspections(
       }
     }),
   );
-
-  const inlineImages: UrlEnrichment["inlineImages"] = [];
-  const chatImages: UrlEnrichment["chatImages"] = [];
-  const blocks: string[] = [];
 
   for (const item of reports) {
     if (!item?.report) continue;
@@ -959,16 +1039,21 @@ export async function enrichTextWithUrlInspections(
 
   if (!blocks.length) return { text, inlineImages, chatImages };
 
+  const figmaNote = figmaUrls.length && inlineImages.length
+    ? "\n\nFIGMA SCREENSHOTS attached. Match the file exactly — layout, type, color, assets."
+    : "";
   const shotNote =
-    cloneMode && inlineImages.length
+    cloneMode && webUrls.length && inlineImages.length
       ? "\n\nFULL-PAGE SCREENSHOT attached (scroll it). COPY scraped videos + CSS classes. Build EVERY section to the footer — not just the hero."
-      : cloneMode
+      : cloneMode && webUrls.length
         ? "\n\nWARNING: Screenshot failed — still build ALL sections from HTML scrape + videos/CSS."
         : "";
 
   return {
-    text: `${text}${shotNote}\n\n${blocks.join("\n\n---\n\n")}`,
+    text: `${text}${figmaNote}${shotNote}\n\n${blocks.join("\n\n---\n\n")}`,
     inlineImages,
     chatImages,
+    skeletonFiles: skeletonFiles.length ? skeletonFiles : undefined,
+    skeletonKind,
   };
 }

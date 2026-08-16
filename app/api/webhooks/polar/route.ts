@@ -1,5 +1,6 @@
 import { Webhooks } from "@polar-sh/nextjs";
 import {
+  applyPolarCheckout,
   applyPolarSubscription,
   revokePolarSubscription,
   syncPolarSubscriptionUpdate,
@@ -10,6 +11,15 @@ export const runtime = "nodejs";
 
 export const POST = Webhooks({
   webhookSecret: polarWebhookSecret() ?? "",
+  onCheckoutUpdated: async (payload) => {
+    await applyPolarCheckout(payload.data as Record<string, unknown>);
+  },
+  onOrderPaid: async (payload) => {
+    await applyPolarSubscription(payload.data as Record<string, unknown>);
+  },
+  onSubscriptionCreated: async (payload) => {
+    await applyPolarSubscription(payload.data as Record<string, unknown>);
+  },
   onSubscriptionActive: async (payload) => {
     await applyPolarSubscription(payload.data as Record<string, unknown>);
   },

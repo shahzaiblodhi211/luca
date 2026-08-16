@@ -79,3 +79,27 @@ Redeploy after changing env on Vercel.
 - **Sign up** modal → OAuth creates a new user (or links provider to existing email).
 - **Sign in** modal → OAuth only logs in existing users (by provider id or linked email); otherwise error asking to sign up first.
 - Email/password accounts can link a provider on first OAuth use with the same email.
+
+## Figma (not sign-in — users connect to import files)
+
+This is separate from Google/GitHub/Apple. Luca users stay signed in with Luca, then **Connect Figma** so a pasted share link opens with *their* Figma access.
+
+1. [Figma developers → My apps](https://www.figma.com/developers/apps) → create an app, then **finish the publish flow**. Draft apps can complete OAuth but the REST API returns `403 Invalid token`. **Private** (your team) is enough for local/dev. Public needs Figma review.
+2. **OAuth credentials → Add a redirect URL** — must match exactly (no trailing slash):
+   - `http://localhost:3000/api/integrations/figma/callback`
+   - `https://lucaai.app/api/integrations/figma/callback` (production)
+   
+   `Invalid redirect uri` means this list does not include the URL Luca is sending. Add both if you develop locally and deploy.
+3. On **OAuth scopes**, enable these three (leave the rest off):
+   - **Read the contents of and render images from files** (`file_content:read`)
+   - **Read metadata of files** (`file_metadata:read`)
+   - **Read the current user's name, email, and profile image** (`current_user:read`)
+   
+   Luca requests exactly those. If a requested scope is not enabled on the app, Figma returns `Invalid scopes for app`.
+
+| Variable | Notes |
+|----------|--------|
+| `FIGMA_CLIENT_ID` | App client id |
+| `FIGMA_CLIENT_SECRET` | App client secret |
+
+How access works: the connected Figma account must be a **Viewer** (or higher) on the file. **Share → Anyone with the link can view is not enough** for the Figma REST API — Luca will only see a thumbnail and will refuse to invent a site. Invite the connected handle, then paste a **frame** link (`node-id`).

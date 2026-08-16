@@ -8,6 +8,9 @@ lucaai.app {
 	handle /_preview/* {
 		reverse_proxy 127.0.0.1:3001
 	}
+	handle /p/* {
+		reverse_proxy 127.0.0.1:3001
+	}
 
 	# Main Luca app (next start on :3000)
 	handle {

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 
 export const PREVIEW_RUNTIME_DIR = path.join(process.cwd(), ".preview-runtime");
@@ -14,4 +15,12 @@ export function sanitizeChatId(chatId: string): string {
 
 export function workspaceDirFor(chatId: string): string {
   return path.join(PREVIEW_WORKSPACES_DIR, sanitizeChatId(chatId));
+}
+
+export function workspaceExists(chatId: string): boolean {
+  try {
+    return existsSync(workspaceDirFor(chatId));
+  } catch {
+    return false;
+  }
 }

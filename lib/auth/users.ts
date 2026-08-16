@@ -52,6 +52,12 @@ export function toPublicUser(user: UserDoc): PublicUser {
     email: user.email,
     name: user.name,
     ...(user.imageUrl ? { imageUrl: user.imageUrl } : {}),
+    figmaConnected: Boolean(user.figma?.accessTokenEnc),
+    ...(user.figma?.handle ? { figmaHandle: user.figma.handle } : {}),
+    vercelConnected: Boolean(user.vercel?.accessTokenEnc),
+    ...(user.vercel?.username
+      ? { vercelUsername: user.vercel.username }
+      : {}),
   };
 }
 

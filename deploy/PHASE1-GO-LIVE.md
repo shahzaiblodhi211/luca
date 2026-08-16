@@ -38,14 +38,36 @@ Never commit `.env.local`, `gemini-keys.txt`, or `.gemini-key-state.json`.
 5. **Install Command:** `SKIP_PLAYWRIGHT=1 npm ci`  
    **Build Command:** `npm run build`  
    (These match repo `vercel.json` — Vercel should pick them up automatically.)
-6. **Environment Variables:** add the vars from section 2 below (Production at minimum), then **Deploy**.
+6. **Environment Variables:** run `npm run vercel:env` and import `deploy/vercel-env-import.env`, or add the vars from section 2 below (Production at minimum), then **Deploy**.
 
-Optional CLI (after `npx vercel login`):
+This repo is already linked (`.vercel/project.json` → project `luca-ai`).
+
+### CLI publish
 
 ```powershell
 cd G:\Documents\luca-ai
-npx vercel link
-npx vercel env pull .env.vercel.local   # optional: inspect what Vercel has
+npx vercel login
+npm run vercel:env
+# Vercel → Settings → Environment Variables → Import .env → deploy/vercel-env-import.env
+npm run vercel:prod
+```
+
+### GitHub Actions publish
+
+Add these secrets on `shahzaiblodhi211/luca`:
+
+| Secret | Where to get it |
+|--------|-----------------|
+| `VERCEL_TOKEN` | [vercel.com/account/tokens](https://vercel.com/account/tokens) |
+| `VERCEL_ORG_ID` | `.vercel/project.json` → `orgId` |
+| `VERCEL_PROJECT_ID` | `.vercel/project.json` → `projectId` |
+
+Pushes to `main` deploy production; pull requests deploy a preview.
+
+Optional CLI inspect:
+
+```powershell
+npx vercel env pull .env.vercel.local
 ```
 
 ---

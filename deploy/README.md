@@ -22,7 +22,7 @@ luca-ai/
 6. `npx pm2 start deploy/ecosystem.config.cjs` → `pm2 save`.
 7. Name.com: **A** record `@` → droplet IP.
 
-Browser loads previews at `https://lucaai.app/_preview/4103/…` (proxied to loopback `next dev`).
+Browser loads previews at `https://lucaai.app/p/{chatId}/…` (proxied to loopback `next dev`).
 
 ## Local dev
 

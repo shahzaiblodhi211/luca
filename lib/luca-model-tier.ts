@@ -28,14 +28,14 @@ export const LUCA_MODEL_TIERS: Record<LucaModelTier, LucaModelTierMeta> = {
   turbo: {
     id: "turbo",
     label: LUCA_TURBO,
-    apiModel: "gemini-3.5-flash",
+    apiModel: "gemini-3.6-flash",
     minPlan: "plus",
     hint: "Balanced · stronger reasoning",
   },
   ultra: {
     id: "ultra",
     label: LUCA_ULTRA,
-    apiModel: "gemini-3.6-flash",
+    apiModel: "gemini-3.7-flash",
     minPlan: "pro",
     hint: "Best quality · complex apps",
   },

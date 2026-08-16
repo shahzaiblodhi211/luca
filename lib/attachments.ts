@@ -105,6 +105,8 @@ export async function saveAttachment(input: {
   buffer: Buffer;
   /** Skip square resize — keep tall full-page clone screenshots intact. */
   preserveAspect?: boolean;
+  /** Store the file as-is (Figma PNGs must keep alpha — no JPEG flatten). */
+  keepOriginal?: boolean;
 }): Promise<ChatAttachment> {
   if (!isAllowedAttachment(input.name, input.mimeType, input.size)) {
     throw new Error(`Unsupported or too large file: ${input.name}`);
@@ -115,9 +117,11 @@ export async function saveAttachment(input: {
   let mimeType = input.mimeType || "application/octet-stream";
   let name = input.name;
   let textContent: string | undefined;
-  const isCloneShot = /^clone-screenshot/i.test(name) || input.preserveAspect;
+  const isCloneShot =
+    !input.keepOriginal &&
+    (/^clone-screenshot/i.test(name) || input.preserveAspect);
 
-  if (kind === "image" && !mimeType.includes("svg")) {
+  if (kind === "image" && !input.keepOriginal && !mimeType.includes("svg")) {
     try {
       if (isCloneShot) {
         // Width-only resize — never squash a full-page shot into 1280×1280

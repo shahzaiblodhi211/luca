@@ -39,7 +39,7 @@ const SUGGESTIONS: { label: string; prompt: string }[] = [
   {
     label: "Ecommerce",
     prompt:
-      "Build a full ecommerce storefront: product grid, product detail page, cart, and checkout. Include categories, search, and a polished shop experience with realistic product data—not a placeholder-only demo.",
+      "Build a full boutique ecommerce storefront with a locked editorial theme (one palette, one type pairing — not mixed AI-SaaS). Product grid, PDP, cart, and checkout. 10 distinct SKUs, each with its own catalog product photo (not random lifestyle). Categories, search, and filters that work.",
   },
 ];
 

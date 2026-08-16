@@ -2,6 +2,7 @@
 
 import { ArrowUp, Loader2, Mic, Plus, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import {
   Attachment,
   AttachmentPreview,
@@ -35,6 +36,10 @@ import { useVoiceDictation } from "./use-voice-dictation";
 import { VoiceLiveModal } from "./voice-live-modal";
 import { VoiceRecordingBar } from "./voice-recording-bar";
 import { AnimatedBuildPlaceholder } from "./animated-build-placeholder";
+import { ComposerPlusMenu } from "./composer-plus-menu";
+import { figmaConnectUrl } from "./figma-connect-button";
+import { extractFigmaUrls } from "@/lib/figma-url";
+import { UpgradePlanBanner } from "@/components/billing/upgrade-plan-banner";
 
 export type PromptSubmitPayload = {
   text: string;
@@ -100,7 +105,8 @@ export function PromptForm({
   /** Footer disclaimer under composer (chat page). */
   showDisclaimer?: boolean;
 }) {
-  const { billing } = useAuthModal();
+  const { billing, user, figmaOAuthConfigured, openAuth } = useAuthModal();
+  const pathname = usePathname() || "/";
   const { showToast } = useAuthToast();
   const { openPlans } = usePlansModal();
   const planId = (billing?.planId ?? "free") as PlanId;
@@ -129,6 +135,7 @@ export function PromptForm({
       setInternalTier(resolved);
     }
   };
+  const [attachOpen, setAttachOpen] = useState(false);
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [liveModelId, setLiveModelId] = useState(DEFAULT_LIVE_VOICE_MODEL_ID);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -316,7 +323,6 @@ export function PromptForm({
           inputFocused || dragOver
             ? "border-composer-border-focus"
             : "border-composer-border",
-          compact ? "px-3 pb-2 pt-2.5" : "px-3.5 pb-2.5 pt-3",
         )}
         onDragEnter={(e) => {
           e.preventDefault();
@@ -336,6 +342,63 @@ export function PromptForm({
           if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files);
         }}
       >
+        <div className={compact ? "px-3 pb-2 pt-2.5" : "px-3.5 pb-2.5 pt-3"}>
+        {extractFigmaUrls(value).length > 0 &&
+        figmaOAuthConfigured &&
+        billing &&
+        !billing.figmaEnabled ? (
+          <div className="mb-2.5 flex items-center justify-between gap-3 rounded-xl border border-zinc-700/80 bg-zinc-900/80 px-3 py-2">
+            <p className="min-w-0 text-[12.5px] leading-snug text-zinc-300">
+              Figma import is on Plus and Pro.
+            </p>
+            <a
+              href="/billing"
+              className="shrink-0 rounded-lg bg-zinc-100 px-2.5 py-1 text-[12px] font-medium text-zinc-950"
+            >
+              Upgrade
+            </a>
+          </div>
+        ) : extractFigmaUrls(value).length > 0 &&
+        figmaOAuthConfigured &&
+        user?.figmaConnected ? (
+          <div className="mb-2.5 rounded-xl border border-zinc-700/80 bg-zinc-900/80 px-3 py-2">
+            <p className="text-[12.5px] leading-snug text-zinc-300">
+              Paste a <span className="text-zinc-100">frame</span> link
+              (node-id). Invite{" "}
+              {user.figmaHandle ? (
+                <span className="text-zinc-100">@{user.figmaHandle}</span>
+              ) : (
+                "the Figma account you connected"
+              )}{" "}
+              as a Viewer — “Anyone with the link” is not enough for Luca to
+              read layers.
+            </p>
+          </div>
+        ) : extractFigmaUrls(value).length > 0 &&
+          figmaOAuthConfigured &&
+          !user?.figmaConnected ? (
+          <div className="mb-2.5 flex items-center justify-between gap-3 rounded-xl border border-zinc-700/80 bg-zinc-900/80 px-3 py-2">
+            <p className="min-w-0 text-[12.5px] leading-snug text-zinc-300">
+              Connect Figma so Luca can open this share link with your access.
+            </p>
+            {user ? (
+              <a
+                href={figmaConnectUrl(pathname)}
+                className="shrink-0 rounded-lg bg-zinc-100 px-2.5 py-1 text-[12px] font-medium text-zinc-950"
+              >
+                Connect Figma
+              </a>
+            ) : (
+              <button
+                type="button"
+                onClick={() => openAuth("login")}
+                className="shrink-0 rounded-lg bg-zinc-100 px-2.5 py-1 text-[12px] font-medium text-zinc-950"
+              >
+                Sign in
+              </button>
+            )}
+          </div>
+        ) : null}
         {pendingFiles.length > 0 && (
           <Attachments variant="grid" className="mb-2.5 ml-0">
             {pendingFiles.map((item) => (
@@ -437,16 +500,47 @@ export function PromptForm({
                   e.target.value = "";
                 }}
               />
-              <button
-                type="button"
-                disabled={disabled || pending || pendingFiles.length >= 6}
-                onClick={() => fileRef.current?.click()}
-                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-composer-icon transition-colors hover:bg-composer-icon-hover-bg hover:text-composer-icon-hover disabled:opacity-40"
-                title="Add files"
-                aria-label="Add files"
-              >
-                <Plus className="h-5 w-5" strokeWidth={1.75} />
-              </button>
+              <div className="relative">
+                <button
+                  type="button"
+                  disabled={disabled || pending || pendingFiles.length >= 6}
+                  onClick={() => setAttachOpen((v) => !v)}
+                  className={cn(
+                    "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-composer-icon transition-colors hover:bg-composer-icon-hover-bg hover:text-composer-icon-hover disabled:opacity-40",
+                    attachOpen && "bg-composer-icon-hover-bg text-composer-icon-hover",
+                  )}
+                  title="Add"
+                  aria-label="Add"
+                  aria-expanded={attachOpen}
+                >
+                  <Plus className="h-5 w-5" strokeWidth={1.75} />
+                </button>
+                <ComposerPlusMenu
+                  open={attachOpen}
+                  onClose={() => setAttachOpen(false)}
+                  figmaLocked={!billing?.figmaEnabled}
+                  onUpload={() => fileRef.current?.click()}
+                  onImportFigma={() => {
+                    if (!user) {
+                      openAuth("login");
+                      return;
+                    }
+                    if (!billing?.figmaEnabled) {
+                      openPlans();
+                      return;
+                    }
+                    if (figmaOAuthConfigured && !user.figmaConnected) {
+                      window.location.href = figmaConnectUrl(pathname);
+                      return;
+                    }
+                    showToast({
+                      type: "success",
+                      message: "Paste a Figma file or frame link in the chat.",
+                    });
+                    ref.current?.focus();
+                  }}
+                />
+              </div>
               <LucaModelPicker
                 compact={compact}
                 value={lucaModelTier}
@@ -554,6 +648,8 @@ export function PromptForm({
             </div>
           </div>
         )}
+        </div>
+        <UpgradePlanBanner />
       </div>
 
       {showDisclaimer ? (

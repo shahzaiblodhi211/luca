@@ -8,6 +8,7 @@ import {
   upsertPhaseCommand,
   upsertPhaseFile,
 } from "@/lib/agent/build-timeline";
+import { phaseLabelForFile } from "@/lib/agent/pretty-file-label";
 import {
   buildEnvFileContent,
   envExamplePath,
@@ -84,6 +85,10 @@ export type AgentState = {
   phaseSeq: number;
   /** Substrings that must appear in project files before finish() (clone mode). */
   cloneRequiredTokens: string[];
+  /** Figma-to-code: match frames; do not require a long homepage scrape. */
+  figmaBuild: boolean;
+  /** Figma link present but file not readable — block all project writes. */
+  figmaBlocked: boolean;
   /** Consecutive edit_file misses — force write_file fallback. */
   editFailStreak: number;
   editFailPath: string;
@@ -105,6 +110,8 @@ export function createAgentState(projectId?: string | null): AgentState {
     currentPhaseId: "",
     phaseSeq: 1,
     cloneRequiredTokens: [],
+    figmaBuild: false,
+    figmaBlocked: false,
     editFailStreak: 0,
     editFailPath: "",
     envRequested: false,
@@ -115,13 +122,67 @@ function normalizeNewlines(s: string): string {
   return s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
-function phaseIdFromArgs(state: AgentState, args: Record<string, unknown>): string {
+/** Swap local image paths for stock CDN URLs already resolved in this project. */
+function applyStockImageSrcs(state: AgentState, code: string): string {
+  let next = code;
+  for (const file of state.files.values()) {
+    if (!file.isImage || !file.imageUrl) continue;
+    const live = file.imageUrl;
+    if (!live.startsWith("http") && !live.startsWith("/api/images/")) continue;
+    const publicPath = file.path.startsWith("public/")
+      ? `/${file.path.slice("public/".length)}`
+      : file.path.startsWith("/")
+        ? file.path
+        : `/${file.path}`;
+    const variants = [
+      publicPath,
+      file.path,
+      file.path.replace(/^public\//, "/"),
+      `/${file.path.replace(/^public\//, "")}`,
+    ];
+    for (const v of [...new Set(variants)]) {
+      if (!v || v === live) continue;
+      next = next.split(`"${v}"`).join(`"${live}"`);
+      next = next.split(`'${v}'`).join(`'${live}'`);
+      next = next.split(`\`${v}\``).join(`\`${live}\``);
+    }
+  }
+  return next;
+}
+
+function phaseIdFromArgs(
+  state: AgentState,
+  args: Record<string, unknown>,
+  path?: string,
+  action: "create" | "update" | "delete" = "create",
+): string {
   const fromArg = String(args.phase_id || args.phaseId || "").trim();
-  if (fromArg) {
+  if (
+    fromArg &&
+    state.timeline.some((p) => p.type === "phase" && p.id === fromArg)
+  ) {
     state.currentPhaseId = fromArg;
     return fromArg;
   }
-  const { phaseId } = ensurePhaseOnTimeline(state, "Building project files");
+
+  const current = state.timeline.find(
+    (p) => p.type === "phase" && p.id === state.currentPhaseId,
+  );
+  if (
+    current?.type === "phase" &&
+    current.files.length === 0 &&
+    current.commands.length === 0
+  ) {
+    if (path && /^building project files$/i.test(current.text)) {
+      current.text = phaseLabelForFile(path, action);
+    }
+    return current.id;
+  }
+
+  const label = path
+    ? phaseLabelForFile(path, action)
+    : "Created files";
+  const { phaseId } = ensurePhaseOnTimeline(state, label);
   return phaseId;
 }
 
@@ -132,48 +193,45 @@ function projectIsUiBuild(files: Map<string, AgentFile>): boolean {
   return false;
 }
 
-function projectHasGeneratedLogoFile(files: Map<string, AgentFile>): boolean {
-  for (const f of files.values()) {
-    if (
-      f.isImage &&
-      (f.imageKind === "logo" ||
-        /logo|wordmark|brand-mark|favicon/i.test(f.path))
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function logoReferencedInUi(files: Map<string, AgentFile>): boolean {
+/** Hand-written brand mark: an SVG/TSX logo asset that the UI actually uses. */
+function projectHasLogoAsset(files: Map<string, AgentFile>): boolean {
   const blob = [...files.values()]
     .filter((f) => !f.isImage && f.code)
     .map((f) => f.code)
     .join("\n");
+
+  // A src/href pointing at a logo file (local or https)
+  if (/["'][^"']*logo[^"']*\.(svg|png|webp|ico)[^"']*["']/i.test(blob)) {
+    return true;
+  }
   if (/src=["']https?:\/\/[^"']+/i.test(blob) && /logo/i.test(blob)) {
     return true;
   }
-  return /["']\/images\/(logo|mark)[^"']*["']/i.test(blob);
-}
+  if (/["']\/images\/(logo|mark)[^"']*["']/i.test(blob)) return true;
 
-function projectHasLogoAsset(files: Map<string, AgentFile>): boolean {
-  const generated = projectHasGeneratedLogoFile(files);
-  const wired = logoReferencedInUi(files);
-  if (generated) return wired;
-  return wired;
+  // A logo/brand component file that's imported or rendered somewhere
+  const hasLogoFile = [...files.keys()].some((p) =>
+    /(^|\/)(logo|brand-mark|wordmark)[^/]*\.(svg|tsx|jsx)$/i.test(p),
+  );
+  if (!hasLogoFile) return false;
+  return (
+    /from\s+["'][^"']*(logo|brand)[^"']*["']/i.test(blob) ||
+    /<(Logo|BrandMark|Wordmark)\b/.test(blob)
+  );
 }
 
 export const AGENT_TOOL_DECLARATIONS = [
   {
     name: "phase",
     description:
-      "REQUIRED before each batch of file/package work. One short plain sentence describing what you are about to build (e.g. \"Setting up the cart state and product data\"). No hype. Call this, then emit the write_file / install_package tools for that batch in the SAME step.",
+      "Group header in the build stream. Call once per file (or tiny related pair). Label is 2–4 words from the filename only — \"Created hero section\", \"Created layout\". Never a long description; put that in the 2-line native text above. Files after this call attach automatically.",
     parameters: {
       type: "object",
       properties: {
         text: {
           type: "string",
-          description: "One narrative sentence for the upcoming file/command batch",
+          description:
+            '2–4 words from the file (e.g. "Created hero section"). No extra adjectives.',
         },
       },
       required: ["text"],
@@ -210,7 +268,7 @@ export const AGENT_TOOL_DECLARATIONS = [
   {
     name: "write_file",
     description:
-      "Create a NEW file or fully rewrite a file. Call `phase` first for the batch. For small edits prefer edit_file.",
+      "Create a NEW file or fully rewrite a file. First emit 2–3 short native sentences about what you're about to build, then `phase` (short outcome label) before each small group of related files. For small edits prefer edit_file.",
     parameters: {
       type: "object",
       properties: {
@@ -225,10 +283,6 @@ export const AGENT_TOOL_DECLARATIONS = [
         language: {
           type: "string",
           description: "Optional language hint: tsx, ts, css, js",
-        },
-        phase_id: {
-          type: "string",
-          description: "Optional phase id from the preceding phase tool",
         },
       },
       required: ["path", "code"],
@@ -258,10 +312,6 @@ export const AGENT_TOOL_DECLARATIONS = [
           type: "boolean",
           description:
             "If true, replace every match. Default false (requires a unique old_string).",
-        },
-        phase_id: {
-          type: "string",
-          description: "Optional phase id from the preceding phase tool",
         },
       },
       required: ["path", "old_string", "new_string"],
@@ -298,19 +348,19 @@ export const AGENT_TOOL_DECLARATIONS = [
   {
     name: "write_image",
     description:
-      "PROJECT ONLY — generate images into the Code Project via Luca's image pipeline (hero, product, avatar, brand mark). REQUIRED on every UI build: at least one write_image with kind logo (e.g. public/images/logo.png) matching the art direction, then use IMAGE_SRC in header/layout/favicon. Batch logos + heroes in step 1 with install_package. Never invent URLs or placeholders. Chat-only \"generate a logo\" (no app) → generate_image instead.",
+      "PROJECT ONLY — find a real stock photo (free Pexels library) for the Code Project. Returns IMAGE_SRC as a direct https URL: use it EXACTLY as returned. Query = the actual subject (e.g. \"tan leather tote bag product photo white background\"), never vague words like fashion/hero/ecommerce/lifestyle. One unique photo per product SKU; reuse that URL on grid, PDP, and cart. Skip this tool when a Figma/clone brief already lists asset URLs — use those. NOT for logos.",
     parameters: {
       type: "object",
       properties: {
         path: {
           type: "string",
           description:
-            'Logical path e.g. "public/images/hero.jpg" or "public/images/logo.png"',
+            'Logical asset id e.g. "public/images/hero.jpg" — any code referencing this path is rewritten to the returned direct URL',
         },
         query: {
           type: "string",
           description:
-            'Detailed visual brief (e.g. "artisan coffee cup steam dark wood table" or "minimal wordmark logo for Verveine coffee, cream and charcoal")',
+            'Exact subject for search (e.g. "tan leather tote bag product photo white background"). Never "fashion", "hero", "ecommerce", or "lifestyle".',
         },
         aspect: {
           type: "string",
@@ -319,7 +369,7 @@ export const AGENT_TOOL_DECLARATIONS = [
         kind: {
           type: "string",
           description:
-            'Image type: "photo" (default), "logo" (brand mark), or "illustration"',
+            'Image type: "photo" (default) or "illustration". "logo" is rejected — hand-write an SVG instead.',
         },
       },
       required: ["path", "query"],
@@ -332,7 +382,6 @@ export const AGENT_TOOL_DECLARATIONS = [
       type: "object",
       properties: {
         path: { type: "string" },
-        phase_id: { type: "string" },
       },
       required: ["path"],
     },
@@ -353,7 +402,6 @@ export const AGENT_TOOL_DECLARATIONS = [
           description:
             "Optional semver (e.g. 1.7.1). Omit to use a pinned/compatible version.",
         },
-        phase_id: { type: "string" },
       },
       required: ["name"],
     },
@@ -452,14 +500,14 @@ export const AGENT_TOOL_DECLARATIONS = [
   {
     name: "finish",
     description:
-      "End the turn after shipping the full ask. summary = plain one-line-per-feature-area bullets (no marketing adjectives like stunning/award-caliber).",
+      "End the turn after shipping the full ask. summary = a short explanation of what you built (2–4 paragraphs, like a chat reply). What it is, what you can do, design direction, one thing to try. No bullet lists, no marketing adjectives.",
     parameters: {
       type: "object",
       properties: {
         summary: {
           type: "string",
           description:
-            "Plain lines of what got built (one feature area per line). No hype.",
+            "2–4 short paragraphs explaining what shipped. Example: Your studio landing is ready.\\n\\n**Stratum** is an editorial architecture site with a spatial hero, Masterplan/BIM switcher, and a live HUD. Open the preview and toggle the modes.",
         },
       },
     },
@@ -468,11 +516,44 @@ export const AGENT_TOOL_DECLARATIONS = [
 
 export type ToolName = (typeof AGENT_TOOL_DECLARATIONS)[number]["name"];
 
+const FIGMA_REWRITE_TOOLS = new Set([
+  "write_image",
+  "generate_image",
+]);
+
+export function isFigmaCanvasLockedPath(path: string): boolean {
+  return /^(app\/page\.tsx|app\/layout\.tsx|app\/globals\.css|components\/site-life\.tsx)$/i.test(
+    path.replace(/^\/+/, ""),
+  );
+}
+
+export function agentToolDeclarationsFor(figmaBuild: boolean) {
+  if (!figmaBuild) return AGENT_TOOL_DECLARATIONS;
+  return AGENT_TOOL_DECLARATIONS.filter((t) => !FIGMA_REWRITE_TOOLS.has(t.name));
+}
+
+const FIGMA_BLOCKED_TOOLS = new Set([
+  "set_project",
+  "write_file",
+  "edit_file",
+  "write_image",
+  "install_package",
+  "delete_file",
+]);
+
 export async function executeAgentTool(
   state: AgentState,
   name: string,
   args: Record<string, unknown>,
 ): Promise<{ ok: boolean; result: string; events: AgentStreamEvent[] }> {
+  if (state.figmaBlocked && FIGMA_BLOCKED_TOOLS.has(name)) {
+    return {
+      ok: false,
+      result:
+        "Figma file is not readable. Do not build anything. Call message_user once: invite the connected Figma account as a Viewer on the file (Share → invite that person — Anyone with the link is not enough for the API), copy the frame link, send it again. Then finish.",
+      events: [],
+    };
+  }
   switch (name) {
     case "phase": {
       const text = String(args.text || "").trim();
@@ -533,6 +614,17 @@ export async function executeAgentTool(
         .trim()
         .replace(/\s+/g, "-");
       if (!id) return { ok: false, result: "set_project.id required", events: [] };
+      if (
+        state.figmaBuild &&
+        state.projectId &&
+        state.projectId !== "project"
+      ) {
+        return {
+          ok: true,
+          result: `project=${state.projectId} (keep the Figma frame id — do not rename the brand)`,
+          events: [{ type: "project", id: state.projectId }],
+        };
+      }
       state.projectId = id;
       return {
         ok: true,
@@ -552,9 +644,41 @@ export async function executeAgentTool(
           events: [],
         };
       }
-      const code = finalizeSourceCode(path, String(args.code ?? ""));
+      const code = applyStockImageSrcs(
+        state,
+        finalizeSourceCode(path, String(args.code ?? "")),
+      );
       if (!code.trim()) {
         return { ok: false, result: "write_file.code required", events: [] };
+      }
+      if (state.figmaBuild && isFigmaCanvasLockedPath(path) && state.files.has(path)) {
+        return {
+          ok: false,
+          result:
+            "Home canvas / layout / globals are locked. write_file a NEW route or component instead (app/shop, app/product, app/about). Do not rewrite app/page.tsx.",
+          events: [],
+        };
+      }
+      if (state.figmaBuild && path.replace(/^\/+/, "") === "app/page.tsx") {
+        const prev = state.files.get(path)?.code || "";
+        const prevAssets: string[] =
+          prev.match(/\/api\/attachments\/[A-Za-z0-9_-]+/g) ?? [];
+        const nextAssets: string[] =
+          code.match(/\/api\/attachments\/[A-Za-z0-9_-]+/g) ?? [];
+        const missing = [...new Set(prevAssets)].filter(
+          (a) => !nextAssets.includes(a),
+        );
+        if (prevAssets.length && missing.length > Math.max(1, prevAssets.length * 0.25)) {
+          return {
+            ok: false,
+            result: [
+              "Figma canvas rewrite dropped asset URLs.",
+              `Keep every /api/attachments/ src from the drafted page. Missing: ${missing.slice(0, 8).join(", ")}.`,
+              "edit_file the skeleton — do not replace it with a new card grid.",
+            ].join(" "),
+            events: [],
+          };
+        }
       }
       if (
         /components\/ui\/button\.tsx$/i.test(path) &&
@@ -580,7 +704,7 @@ export async function executeAgentTool(
       const before = state.files.get(path)?.code;
       const action: BuildFileAction = inferFileAction(existed);
       const delta = linesDelta(before, code);
-      const phaseId = phaseIdFromArgs(state, args);
+      const phaseId = phaseIdFromArgs(state, args, path, action);
       state.files.set(path, { path, code, language });
       state.deleted = state.deleted.filter((p) => p !== path);
       if (state.editFailPath === path || state.editFailStreak > 0) {
@@ -641,6 +765,14 @@ export async function executeAgentTool(
         state.editFailPath === path &&
         state.editFailStreak >= 2
       ) {
+        if (state.figmaBuild && isFigmaCanvasLockedPath(path)) {
+          return {
+            ok: false,
+            result:
+              "edit_file failed twice on the locked canvas. Leave app/page.tsx as-is and call finish now.",
+            events: [],
+          };
+        }
         const existingBlocked = state.files.get(path);
         return {
           ok: false,
@@ -662,7 +794,9 @@ export async function executeAgentTool(
       if (!existing || existing.isImage) {
         return {
           ok: false,
-          result: `edit_file: "${path}" is not loaded. Use write_file with the full file contents.`,
+          result: state.figmaBuild
+            ? `edit_file: "${path}" is not in the project yet. write_file that new route/component (keep app/page.tsx locked).`
+            : `edit_file: "${path}" is not loaded. Use write_file with the full file contents.`,
           events: [],
         };
       }
@@ -679,6 +813,16 @@ export async function executeAgentTool(
         }
 
         const head = code.slice(0, 1800);
+        if (state.figmaBuild && isFigmaCanvasLockedPath(path)) {
+          return {
+            ok: false,
+            result:
+              state.editFailStreak >= 2
+                ? "edit_file missed twice on the locked canvas. Call finish now."
+                : `edit_file: old_string not found in "${path}". Retry once with a shorter unique snippet, or call finish.`,
+            events: [],
+          };
+        }
         if (state.editFailStreak >= 2) {
           return {
             ok: false,
@@ -707,15 +851,44 @@ export async function executeAgentTool(
           events: [],
         };
       }
-      const nextCode = finalizeSourceCode(
-        path,
-        replaceAll
-          ? code.split(oldString).join(newString)
-          : code.replace(oldString, newString),
+      const nextCode = applyStockImageSrcs(
+        state,
+        finalizeSourceCode(
+          path,
+          replaceAll
+            ? code.split(oldString).join(newString)
+            : code.replace(oldString, newString),
+        ),
       );
+      if (
+        state.figmaBuild &&
+        path.replace(/^\/+/, "") === "app/page.tsx" &&
+        /containerType:\s*"inline-size"/.test(code) &&
+        !/containerType:\s*"inline-size"/.test(nextCode)
+      ) {
+        return {
+          ok: false,
+          result:
+            "That edit would remove the Figma canvas wrapper. Keep containerType/inline-size and every left/top/width/height. Change only the requested control.",
+          events: [],
+        };
+      }
+      if (
+        state.figmaBuild &&
+        path.replace(/^\/+/, "") === "app/page.tsx" &&
+        /max-w-7xl|grid-cols-4|w-full max-w/.test(nextCode) &&
+        !/max-w-7xl|grid-cols-4/.test(code)
+      ) {
+        return {
+          ok: false,
+          result:
+            "Do not restack the Figma canvas into a card grid or max-w-7xl. edit_file the existing absolute boxes only.",
+          events: [],
+        };
+      }
       const language = existing.language || "tsx";
       const delta = linesDelta(existing.code, nextCode);
-      const phaseId = phaseIdFromArgs(state, args);
+      const phaseId = phaseIdFromArgs(state, args, path, "update");
       state.files.set(path, { ...existing, code: nextCode, language });
       state.deleted = state.deleted.filter((p) => p !== path);
       state.editFailStreak = 0;
@@ -763,11 +936,20 @@ export async function executeAgentTool(
             ? "logo"
             : "photo";
 
+      if (kind === "logo") {
+        return {
+          ok: false,
+          result:
+            "Image lookup is stock-photo only — logos cannot be fetched from a stock library. Tell the user you can craft an SVG wordmark inside a project build instead, and offer that.",
+          events: [],
+        };
+      }
+
       try {
         const { generateImagenImage } = await import("@/lib/gemini-image");
         const { saveImage, toDataUrl } = await import("@/lib/image-store");
         const bytes = await generateImagenImage(query, {
-          aspectHint: aspect || (kind === "logo" ? "1:1" : undefined),
+          aspectHint: aspect,
           kind,
         });
         const stored = await saveImage({
@@ -817,6 +999,14 @@ export async function executeAgentTool(
       }
     }
     case "write_image": {
+      if (state.figmaBuild) {
+        return {
+          ok: false,
+          result:
+            "Figma-to-code build — do not call write_image. Use the FIGMA ASSET URLS from the brief as <img src>. Recreate the attached frame as-is.",
+          events: [],
+        };
+      }
       const path = String(args.path || "")
         .trim()
         .replace(/^\/+/, "");
@@ -825,6 +1015,20 @@ export async function executeAgentTool(
         return {
           ok: false,
           result: "write_image.path and query required",
+          events: [],
+        };
+      }
+      const queryWords = query.split(/\s+/).filter(Boolean);
+      const vagueQuery =
+        queryWords.length < 3 ||
+        /^(hero|banner|background|abstract|fashion|ecommerce|e-commerce|lifestyle|modern|premium|luxury|product|shop)s?(\s+(photo|image|shot|hero|banner))?$/i.test(
+          query,
+        );
+      if (vagueQuery) {
+        return {
+          ok: false,
+          result:
+            'write_image.query must name the actual subject — e.g. "tan leather tote bag product photo white background". Not "fashion", "hero", or "ecommerce". Retry once with a concrete object + setting.',
           events: [],
         };
       }
@@ -837,50 +1041,59 @@ export async function executeAgentTool(
             ? ("logo" as const)
             : ("photo" as const);
 
+      if (kind === "logo") {
+        return {
+          ok: false,
+          result:
+            "Logos are not generated — write the brand mark yourself. write_file an inline SVG asset (e.g. public/logo.svg or components/brand/logo.tsx) using the brand's colors and type, then reference it in the header/layout. Do not retry write_image for logos.",
+          events: [],
+        };
+      }
+
       try {
-        const { generateImagenImage } = await import("@/lib/gemini-image");
-        const { saveImage, toDataUrl } = await import("@/lib/image-store");
-        const bytes = await generateImagenImage(query, {
-          aspectHint: aspect,
-          kind,
-        });
-        const stored = await saveImage({
-          query,
-          mimeType: bytes.mimeType,
-          base64: bytes.base64,
+        const { searchPexelsPhoto } = await import("@/lib/pexels-image");
+        const { normalizeAspect } = await import("@/lib/gemini-image");
+
+        // Don't repeat a photo already used in this project
+        const excludeIds = new Set<number>();
+        for (const f of state.files.values()) {
+          if (!f.isImage || !f.imageUrl) continue;
+          const m = f.imageUrl.match(/pexels\.com\/photos\/(\d+)\//i);
+          if (m) excludeIds.add(Number(m[1]));
+        }
+
+        const photo = await searchPexelsPhoto(
+          kind === "illustration" ? `${query} illustration` : query,
+          { aspect: normalizeAspect(aspect, kind), excludeIds },
+        );
+        const directUrl = photo.directUrl;
+
+        state.files.set(path, {
           path,
-          salt: `${kind}:${aspect || ""}:`,
+          code: directUrl,
+          language: "txt",
+          query,
+          isImage: true,
+          aspect,
+          imageUrl: directUrl,
+          imageKind: kind,
         });
-        const apiUrl = `/api/images/${stored._id}`;
-        const dataUrl = toDataUrl(stored);
+
         const publicPath = path.startsWith("public/")
           ? `/${path.slice("public/".length)}`
           : path.startsWith("/")
             ? path
             : `/${path}`;
 
-        state.files.set(path, {
-          path,
-          code: apiUrl,
-          language: "txt",
-          query,
-          isImage: true,
-          aspect,
-          imageUrl: apiUrl,
-          imageDataUrl: dataUrl,
-          imageKind: kind,
-        });
-
-        // Keep source on public path; preview injects bytes via dataUrl map
-        const srcForCode = publicPath;
+        // Code references the stock CDN URL directly — no local file, no proxy
+        const srcForCode = directUrl;
         const events: AgentStreamEvent[] = [
           {
             type: "image",
             path,
             query,
             aspect,
-            url: apiUrl,
-            dataUrl,
+            url: directUrl,
             kind,
           },
         ];
@@ -890,7 +1103,7 @@ export async function executeAgentTool(
           path.replace(/^public\//, "/"),
           `/${path.replace(/^public\//, "")}`,
         ];
-        const phaseId = phaseIdFromArgs(state, args);
+        const phaseId = phaseIdFromArgs(state, args, path, "create");
         for (const [filePath, file] of state.files) {
           if (file.isImage || !file.code) continue;
           let code = file.code;
@@ -929,10 +1142,10 @@ export async function executeAgentTool(
           ok: true,
           result: [
             `IMAGE_SRC=${srcForCode}`,
-            `API_URL=${apiUrl}`,
             `kind=${kind}`,
-            `Use IMAGE_SRC in <img src="${srcForCode}"> and CSS url("${srcForCode}").`,
-            "Generated image asset — do not use placeholders.",
+            `(${photo.attribution})`,
+            `Direct stock URL — use IMAGE_SRC exactly as returned in <img src>, next/image, or CSS url("…").`,
+            "Do not use local /images paths or placeholders for this asset.",
           ].join(" "),
           events,
         };
@@ -940,7 +1153,7 @@ export async function executeAgentTool(
         const msg = err instanceof Error ? err.message : String(err);
         return {
           ok: false,
-          result: `Image generation failed: ${msg.slice(0, 280)}. Retry write_image once with a clearer, more specific query. Do not invent a URL or use a placeholder.`,
+          result: `Stock photo lookup failed: ${msg.slice(0, 280)}. Retry write_image once with simpler, more concrete search terms (subject + setting). Do not invent a URL or use a placeholder.`,
           events: [],
         };
       }
@@ -953,7 +1166,7 @@ export async function executeAgentTool(
         return { ok: false, result: "delete_file.path required", events: [] };
       }
       const before = state.files.get(path)?.code;
-      const phaseId = phaseIdFromArgs(state, args);
+      const phaseId = phaseIdFromArgs(state, args, path, "delete");
       state.files.delete(path);
       if (!state.deleted.includes(path)) state.deleted.push(path);
       const delta = before ? -linesDelta(undefined, before) : 0;
@@ -1040,7 +1253,7 @@ export async function executeAgentTool(
         .filter((a) => a.name);
       const next = actions.slice(0, 7);
       const count = next.length;
-      if (count < 6) {
+      if (count < 6 && !state.figmaBuild) {
         return {
           ok: false,
           result: `Need 6–7 follow-up actions (got ${count}). Call suggest_actions again with more advanced next steps — not unfinished first-turn work (e.g. for stores avoid suggesting Cart/PDP/Search).`,
@@ -1160,12 +1373,17 @@ export async function executeAgentTool(
         const missing = state.cloneRequiredTokens.filter(
           (t) => t && !blob.includes(t),
         );
+        const have = state.cloneRequiredTokens.length - missing.length;
+        const figmaOk =
+          state.figmaBuild &&
+          have >= Math.ceil(state.cloneRequiredTokens.length * 0.5);
         const page = state.files.get("app/page.tsx");
-        const pageTooThin = !page || page.code.length < 2800;
-        if (missing.length || pageTooThin) {
+        const pageTooThin =
+          !state.figmaBuild && (!page || page.code.length < 2800);
+        if ((missing.length && !figmaOk) || pageTooThin) {
           const reasons = [
             missing.length
-              ? `still missing scraped asset URLs in code: ${missing.join(", ")}`
+              ? `still missing Figma/clone asset URLs in code: ${missing.join(", ")} — put those src values on the matching <img> tags`
               : "",
             pageTooThin
               ? "app/page.tsx is too short — scroll the screenshot and build every section to the footer"
@@ -1193,12 +1411,27 @@ export async function executeAgentTool(
       }
       if (
         projectIsUiBuild(state.files) &&
+        !state.figmaBuild &&
         !projectHasLogoAsset(state.files)
       ) {
         return {
           ok: false,
           result:
-            'Missing brand logo. In step 1 call write_image with kind "logo" (e.g. public/images/logo.png) — brief must match your fonts/colors/thesis — then reference IMAGE_SRC in site-header, layout, or the app shell. Do not use Lucide or text-only as the brand mark. Retry finish after wiring the logo.',
+            "Missing brand logo. Write the brand mark yourself as an SVG asset (write_file public/logo.svg or components/brand/logo.tsx with an inline <svg> wordmark in the brand's colors), reference it in site-header/layout/app shell, then retry finish. Do not use a bare Lucide icon as the brand mark and do not call write_image for logos.",
+          events: [],
+        };
+      }
+      if (
+        state.figmaBuild &&
+        projectIsUiBuild(state.files) &&
+        !/\/api\/attachments\/|<img[^>]+src=/.test(
+          [...state.files.values()].map((f) => f.code).join("\n"),
+        )
+      ) {
+        return {
+          ok: false,
+          result:
+            "Figma-to-code: put the LOGO / PHOTO asset URLs from the brief on visible <img> tags (not sr-only, not a hand-lettered SVG stand-in), then finish.",
           events: [],
         };
       }

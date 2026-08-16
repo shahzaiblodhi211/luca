@@ -20,6 +20,8 @@ type AuthContextValue = {
   user: PublicUser | null;
   billing: PublicBilling | null;
   loading: boolean;
+  figmaOAuthConfigured: boolean;
+  vercelOAuthConfigured: boolean;
   openAuth: (mode?: AuthMode) => void;
   closeAuth: () => void;
   setMode: (mode: AuthMode) => void;
@@ -36,6 +38,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [mode, setMode] = useState<AuthMode>("signup");
   const [user, setUser] = useState<PublicUser | null>(null);
   const [billing, setBilling] = useState<PublicBilling | null>(null);
+  const [figmaOAuthConfigured, setFigmaOAuthConfigured] = useState(false);
+  const [vercelOAuthConfigured, setVercelOAuthConfigured] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const refreshUser = useCallback(async () => {
@@ -44,12 +48,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const data = (await res.json()) as {
         user: PublicUser | null;
         billing?: PublicBilling | null;
+        figmaOAuthConfigured?: boolean;
+        vercelOAuthConfigured?: boolean;
       };
       setUser(data.user ?? null);
       setBilling(data.billing ?? null);
+      setFigmaOAuthConfigured(Boolean(data.figmaOAuthConfigured));
+      setVercelOAuthConfigured(Boolean(data.vercelOAuthConfigured));
     } catch {
       setUser(null);
       setBilling(null);
+      setFigmaOAuthConfigured(false);
+      setVercelOAuthConfigured(false);
     } finally {
       setLoading(false);
     }
@@ -70,6 +80,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await fetch("/api/auth/logout", { method: "POST" });
     setUser(null);
     setBilling(null);
+    setFigmaOAuthConfigured(false);
+    setVercelOAuthConfigured(false);
   }, []);
 
   const value = useMemo(
@@ -79,6 +91,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user,
       billing,
       loading,
+      figmaOAuthConfigured,
+      vercelOAuthConfigured,
       openAuth,
       closeAuth,
       setMode,
@@ -93,6 +107,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user,
       billing,
       loading,
+      figmaOAuthConfigured,
+      vercelOAuthConfigured,
       openAuth,
       closeAuth,
       refreshUser,

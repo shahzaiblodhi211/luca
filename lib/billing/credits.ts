@@ -1,7 +1,19 @@
 import type { UserDoc } from "@/lib/auth/types";
 import { findUserById, getUsersCollection } from "@/lib/auth/users";
 import { BillingError } from "./errors";
-import { capThinkingLevelForPlan, getPlan, type PlanId } from "./plans";
+import {
+  canUseFigmaForPlan,
+  capThinkingLevelForPlan,
+  getPlan,
+  type PlanId,
+} from "./plans";
+import {
+  currentBillingPeriod,
+  isLegacyMonthKey,
+  isSignupInferredAnchor,
+  resolveBillingAnchor,
+  toDate,
+} from "./period";
 import type { PublicBilling } from "./types";
 import type { ThinkingLevel } from "@/lib/thinking-level";
 import {
@@ -25,16 +37,21 @@ function defaultBillingFields(now = new Date()): Pick<
   | "planId"
   | "creditsRemaining"
   | "creditsUsedToday"
+  | "figmaImportsUsed"
   | "billingPeriodKey"
+  | "billingCycleAnchor"
   | "usageDayKey"
   | "billingExempt"
 > {
   const plan = getPlan("free");
+  const period = currentBillingPeriod(now, now);
   return {
     planId: "free",
     creditsRemaining: plan.monthlyCredits,
     creditsUsedToday: 0,
-    billingPeriodKey: utcMonthKey(now),
+    figmaImportsUsed: 0,
+    billingPeriodKey: period.key,
+    billingCycleAnchor: now,
     usageDayKey: utcDayKey(now),
     billingExempt: false,
   };
@@ -42,32 +59,38 @@ function defaultBillingFields(now = new Date()): Pick<
 
 export function normalizeUserBilling(user: UserDoc): UserDoc {
   const now = new Date();
-  const month = utcMonthKey(now);
   const day = utcDayKey(now);
   const planId = (user.planId as PlanId | undefined) ?? "free";
   const plan = getPlan(planId);
+  const billingCycleAnchor = resolveBillingAnchor(user);
+  const period = currentBillingPeriod(billingCycleAnchor, now);
   let creditsRemaining =
     typeof user.creditsRemaining === "number"
       ? user.creditsRemaining
       : plan.monthlyCredits;
   let creditsUsedToday =
     typeof user.creditsUsedToday === "number" ? user.creditsUsedToday : 0;
-  let billingPeriodKey = user.billingPeriodKey ?? month;
+  let figmaImportsUsed =
+    typeof user.figmaImportsUsed === "number" ? user.figmaImportsUsed : 0;
+  let billingPeriodKey = user.billingPeriodKey ?? period.key;
   let usageDayKey = user.usageDayKey ?? day;
   const billingExempt = Boolean(user.billingExempt);
 
   if (billingExempt) {
     creditsRemaining = EXEMPT_CREDITS;
     creditsUsedToday = 0;
-  } else {
-    if (billingPeriodKey !== month) {
-      billingPeriodKey = month;
-      creditsRemaining = plan.monthlyCredits;
-    }
-    if (usageDayKey !== day) {
-      usageDayKey = day;
-      creditsUsedToday = 0;
-    }
+    figmaImportsUsed = 0;
+  } else if (isLegacyMonthKey(billingPeriodKey)) {
+    billingPeriodKey = period.key;
+  } else if (billingPeriodKey !== period.key) {
+    billingPeriodKey = period.key;
+    creditsRemaining = plan.monthlyCredits;
+    figmaImportsUsed = 0;
+  }
+
+  if (!billingExempt && usageDayKey !== day) {
+    usageDayKey = day;
+    creditsUsedToday = 0;
   }
 
   return {
@@ -75,7 +98,9 @@ export function normalizeUserBilling(user: UserDoc): UserDoc {
     planId: plan.id,
     creditsRemaining,
     creditsUsedToday,
+    figmaImportsUsed,
     billingPeriodKey,
+    billingCycleAnchor,
     usageDayKey,
     billingExempt,
   };
@@ -89,7 +114,11 @@ export async function syncUserBilling(userId: string): Promise<UserDoc | null> {
     normalized.planId !== user.planId ||
     normalized.creditsRemaining !== user.creditsRemaining ||
     normalized.creditsUsedToday !== user.creditsUsedToday ||
+    normalized.figmaImportsUsed !== user.figmaImportsUsed ||
     normalized.billingPeriodKey !== user.billingPeriodKey ||
+    (!isSignupInferredAnchor(normalized) &&
+      toDate(normalized.billingCycleAnchor)?.getTime() !==
+        toDate(user.billingCycleAnchor)?.getTime()) ||
     normalized.usageDayKey !== user.usageDayKey ||
     normalized.billingExempt !== user.billingExempt;
 
@@ -103,7 +132,11 @@ export async function syncUserBilling(userId: string): Promise<UserDoc | null> {
         planId: normalized.planId,
         creditsRemaining: normalized.creditsRemaining,
         creditsUsedToday: normalized.creditsUsedToday,
+        figmaImportsUsed: normalized.figmaImportsUsed,
         billingPeriodKey: normalized.billingPeriodKey,
+        ...(isSignupInferredAnchor(normalized)
+          ? {}
+          : { billingCycleAnchor: normalized.billingCycleAnchor }),
         usageDayKey: normalized.usageDayKey,
         billingExempt: normalized.billingExempt,
         updatedAt: new Date(),
@@ -135,6 +168,14 @@ export function toPublicBilling(user: UserDoc): PublicBilling {
     creditsRemainingToday,
     periodLabel: u.billingPeriodKey ?? utcMonthKey(),
     billingExempt: u.billingExempt ?? false,
+    figmaEnabled: u.billingExempt || canUseFigmaForPlan(plan.id),
+    monthlyFigmaImports: u.billingExempt
+      ? EXEMPT_CREDITS
+      : plan.monthlyFigmaImports,
+    figmaImportsUsed: u.billingExempt ? 0 : (u.figmaImportsUsed ?? 0),
+    figmaImportsRemaining: u.billingExempt
+      ? EXEMPT_CREDITS
+      : Math.max(0, plan.monthlyFigmaImports - (u.figmaImportsUsed ?? 0)),
   };
 }
 
@@ -212,10 +253,22 @@ export async function refundChatCredit(userId: string): Promise<void> {
 export async function setUserPlan(
   userId: string,
   planId: PlanId,
-  opts?: { billingExempt?: boolean },
+  opts?: { billingExempt?: boolean; cycleAnchor?: Date },
 ): Promise<UserDoc | null> {
   const plan = getPlan(planId);
   const now = new Date();
+  const existing = await findUserById(userId);
+  const wasFree = (existing?.planId ?? "free") === "free";
+  const becomingPaid = plan.id !== "free";
+  const samePlan = existing?.planId === plan.id;
+  const inferredSignup = existing ? isSignupInferredAnchor(existing) : false;
+  let anchor = inferredSignup ? null : toDate(existing?.billingCycleAnchor);
+  if (!anchor || (wasFree && becomingPaid)) {
+    anchor =
+      toDate(opts?.cycleAnchor) ??
+      (becomingPaid ? now : (toDate(existing?.createdAt) ?? now));
+  }
+  const period = currentBillingPeriod(anchor, now);
   const col = await getUsersCollection();
   await col.updateOne(
     { _id: userId },
@@ -224,9 +277,13 @@ export async function setUserPlan(
         planId: plan.id,
         creditsRemaining: opts?.billingExempt
           ? EXEMPT_CREDITS
-          : plan.monthlyCredits,
-        creditsUsedToday: 0,
-        billingPeriodKey: utcMonthKey(now),
+          : samePlan
+            ? (existing?.creditsRemaining ?? plan.monthlyCredits)
+            : plan.monthlyCredits,
+        creditsUsedToday: samePlan ? (existing?.creditsUsedToday ?? 0) : 0,
+        figmaImportsUsed: samePlan ? (existing?.figmaImportsUsed ?? 0) : 0,
+        billingPeriodKey: period.key,
+        billingCycleAnchor: anchor,
         usageDayKey: utcDayKey(now),
         billingExempt: Boolean(opts?.billingExempt),
         updatedAt: now,
@@ -234,6 +291,53 @@ export async function setUserPlan(
     },
   );
   return findUserById(userId);
+}
+
+export function assertCanUseFigma(user: UserDoc): void {
+  const u = normalizeUserBilling(user);
+  if (u.billingExempt) return;
+  const plan = getPlan(u.planId ?? "free");
+  if (!canUseFigmaForPlan(plan.id)) {
+    throw new BillingError(
+      "Figma import is on Plus and Pro. Upgrade to connect Figma and build from files.",
+      "PLAN_REQUIRED",
+    );
+  }
+  if ((u.figmaImportsUsed ?? 0) >= plan.monthlyFigmaImports) {
+    throw new BillingError(
+      `You've used all ${plan.monthlyFigmaImports} Figma imports this month. Upgrade or wait for the next billing period.`,
+      "FIGMA_LIMIT",
+    );
+  }
+}
+
+export async function consumeFigmaImport(userId: string): Promise<void> {
+  const user = await syncUserBilling(userId);
+  if (!user) throw new Error("User not found");
+  assertCanUseFigma(user);
+  if (user.billingExempt) return;
+
+  const plan = getPlan(user.planId ?? "free");
+  const col = await getUsersCollection();
+  const res = await col.updateOne(
+    {
+      _id: userId,
+      billingExempt: { $ne: true },
+      figmaImportsUsed: { $lt: plan.monthlyFigmaImports },
+    },
+    {
+      $inc: { figmaImportsUsed: 1 },
+      $set: { updatedAt: new Date() },
+    },
+  );
+  if (res.modifiedCount === 0) {
+    const fresh = await syncUserBilling(userId);
+    if (fresh) assertCanUseFigma(fresh);
+    throw new BillingError(
+      "Could not use a Figma import. Upgrade or try again later.",
+      "FIGMA_LIMIT",
+    );
+  }
 }
 
 export function capThinkingForUser(

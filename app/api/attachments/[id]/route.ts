@@ -7,7 +7,8 @@ type Params = { params: Promise<{ id: string }> };
 
 export async function GET(_req: Request, { params }: Params) {
   try {
-    const { id } = await params;
+    const { id: raw } = await params;
+    const id = raw.replace(/\.(png|jpe?g|webp|gif|svg)$/i, "");
     const file = await getAttachment(id);
     if (!file) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });

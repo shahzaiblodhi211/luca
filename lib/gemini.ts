@@ -140,7 +140,7 @@ async function buildPartsForTurn(
             `[User uploaded image: ${meta.name}]`,
             `URL: ${meta.url}`,
             opts.includeBinaryAttachments && file?.base64
-              ? "INSPECT visually like DevTools: identify layout regions, spacing, type scale, colors, components. Recreate a pixel-faithful clone when asked."
+              ? "INSPECT visually like DevTools: identify layout regions, spacing, type scale, colors, components. Recreate a pixel-faithful clone. If this is a Figma frame, match it exactly — do not invent a new theme."
               : opts.includeBinaryAttachments
                 ? "(image binary missing from storage — use the URL / prior context)"
                 : "(image was attached earlier — use conversation context; binary omitted for speed)",

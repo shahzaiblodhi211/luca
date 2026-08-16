@@ -156,6 +156,31 @@ export async function captureSiteScreenshot(
   return null;
 }
 
+/** Higher-res JPEG so Figma type, radii, and image crops stay readable. */
+export async function prepareFigmaFrameForModel(
+  base64: string,
+): Promise<{ base64: string; mimeType: string; width: number; height: number }> {
+  const sharp = (await import("sharp")).default;
+  const input = Buffer.from(base64, "base64");
+  const meta = await sharp(input, { failOn: "none" }).metadata();
+  const targetW = 1600;
+  let pipeline = sharp(input, { failOn: "none" }).rotate();
+  if ((meta.width || 0) > targetW) {
+    pipeline = pipeline.resize({
+      width: targetW,
+      withoutEnlargement: true,
+    });
+  }
+  const buffer = await pipeline.jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+  const out = await sharp(buffer).metadata();
+  return {
+    base64: buffer.toString("base64"),
+    mimeType: "image/jpeg",
+    width: out.width || targetW,
+    height: out.height || meta.height || 0,
+  };
+}
+
 /** Resize by WIDTH only so tall full-page shots stay tall. */
 export async function prepareScreenshotForModel(
   base64: string,

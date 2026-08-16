@@ -202,7 +202,7 @@ function applyLiveEvent(prev: LiveState, event: AgentStreamEvent): LiveState {
       }
       parts.unshift({
         type: "thinking",
-        text: "",
+        text: event.text || "",
         ...(event.durationSec != null
           ? { durationSec: event.durationSec }
           : {}),
@@ -806,7 +806,8 @@ export function ChatWorkspace({
               [event.name]: event.version,
             }));
           }
-          if (event.type === "image" && event.dataUrl) {
+          if (event.type === "image" && (event.dataUrl || event.url)) {
+            const live = event.dataUrl || event.url!;
             const publicPath = event.path.startsWith("public/")
               ? `/${event.path.slice("public/".length)}`
               : event.path.startsWith("/")
@@ -814,10 +815,10 @@ export function ChatWorkspace({
                 : `/${event.path}`;
             setImageDataUrls((prev) => ({
               ...prev,
-              [publicPath]: event.dataUrl!,
-              [event.path]: event.dataUrl!,
-              [event.path.replace(/^public\//, "/")]: event.dataUrl!,
-              [`public${publicPath}`]: event.dataUrl!,
+              [publicPath]: live,
+              [event.path]: live,
+              [event.path.replace(/^public\//, "/")]: live,
+              [`public${publicPath}`]: live,
             }));
           }
           if (event.type === "env_request") {

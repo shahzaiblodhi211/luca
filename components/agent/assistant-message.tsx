@@ -3,14 +3,24 @@
 import { MessageResponse } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { ResponseMarkdown, ASSISTANT_MARKDOWN_CLASS } from "./response-markdown";
+import { FileMentionText, doneFilePaths } from "./file-mention-text";
 import { ActionChips } from "./action-chips";
 import { BuildPhase } from "./build-phase";
-import { BuildStatusBar } from "./build-status-bar";
 import { MessageToolbarActions } from "./message-toolbar-actions";
 import { ThinkingLine } from "./thinking-line";
 import { sanitizeVisibleReply } from "@/lib/agent/sanitize-visible-reply";
 import type { AssistantPart, BuildPhasePart } from "@/lib/types";
 
+/** Turn stored summary lines into a normal chat reply. */
+function summaryToMarkdown(lines: string[]) {
+  const cleaned = lines.map((l) => l.replace(/^[-*•]\s+/, "").trim()).filter(Boolean);
+  if (!cleaned.length) return "";
+  const fragments = cleaned.every((l) => l.split(/\s+/).length <= 14);
+  if (fragments && cleaned.length > 1) {
+    return cleaned.map((l) => l.replace(/[.:]+$/, "")).join(". ") + ".";
+  }
+  return cleaned.join("\n\n");
+}
 function hasVisibleContent(parts: AssistantPart[]) {
   return parts.some((p) => {
     if (p.type === "phase") {
@@ -19,7 +29,6 @@ function hasVisibleContent(parts: AssistantPart[]) {
     if (p.type === "text") return Boolean(p.text?.trim()) || p.text === "";
     if (p.type === "thinking") return Boolean(p.text?.trim());
     if (p.type === "summary") return p.lines.length > 0;
-    if (p.type === "status") return p.filesChanged > 0;
     if (p.type === "error") return Boolean(p.message?.trim());
     if (p.type === "preview") return p.ready;
     if (p.type === "actions") return p.actions.length > 0;
@@ -33,10 +42,9 @@ function hasVisibleContent(parts: AssistantPart[]) {
 
 type Group =
   | { kind: "thinking"; part: Extract<AssistantPart, { type: "thinking" }> }
-  | { kind: "phase"; part: BuildPhasePart }
+  | { kind: "phases"; parts: BuildPhasePart[] }
   | { kind: "text"; text: string }
   | { kind: "summary"; lines: string[] }
-  | { kind: "status"; part: Extract<AssistantPart, { type: "status" }> }
   | { kind: "error"; message: string }
   | { kind: "preview" }
   | { kind: "actions"; part: Extract<AssistantPart, { type: "actions" }> }
@@ -79,17 +87,19 @@ function groupParts(parts: AssistantPart[]): Group[] {
   for (const part of parts) {
     if (part.type === "thinking") continue;
     if (part.type === "phase") {
-      out.push({ kind: "phase", part });
+      const last = out[out.length - 1];
+      if (last?.kind === "phases") {
+        last.parts.push(part);
+      } else {
+        out.push({ kind: "phases", parts: [part] });
+      }
       continue;
     }
     if (part.type === "summary") {
       out.push({ kind: "summary", lines: part.lines });
       continue;
     }
-    if (part.type === "status") {
-      out.push({ kind: "status", part });
-      continue;
-    }
+    if (part.type === "status") continue;
     if (part.type === "error") {
       out.push({ kind: "error", message: part.message });
       continue;
@@ -105,12 +115,7 @@ function groupParts(parts: AssistantPart[]): Group[] {
         continue;
       }
       if (!cleaned.trim()) continue;
-      const last = out[out.length - 1];
-      if (last?.kind === "text") {
-        last.text = last.text ? `${last.text}\n\n${cleaned}` : cleaned;
-      } else {
-        out.push({ kind: "text", text: cleaned });
-      }
+      out.push({ kind: "text", text: cleaned });
       continue;
     }
     if (part.type === "actions") out.push({ kind: "actions", part });
@@ -159,6 +164,8 @@ export function AssistantMessage({
       );
     }
 
+    const finishedFiles = doneFilePaths(parts);
+
     const copyText = [
       ...groups
         .filter((g): g is Extract<Group, { kind: "text" }> => g.kind === "text")
@@ -174,7 +181,7 @@ export function AssistantMessage({
       .join("\n\n");
 
     return (
-      <div className="space-y-2">
+      <div className="space-y-3">
         {groups.map((g, i) => {
           if (g.kind === "thinking") {
             if (!g.part.text?.trim() && !isStreaming) return null;
@@ -188,35 +195,23 @@ export function AssistantMessage({
               />
             );
           }
-          if (g.kind === "phase") {
-            const busy =
-              g.part.files.some((f) => f.status === "in_progress") ||
-              g.part.commands.some((c) => c.status === "in_progress");
+          if (g.kind === "phases") {
             return (
-              <BuildPhase
-                key={`phase-${g.part.id}`}
-                phase={g.part}
-                defaultOpen={busy}
-              />
-            );
-          }
-          if (g.kind === "summary") {
-            const md = g.lines.map((line) => `- ${line}`).join("\n");
-            return (
-              <div key={`summary-${i}`} className={ASSISTANT_MARKDOWN_CLASS}>
-                <MessageResponse>{md}</MessageResponse>
+              <div
+                key={`phases-${g.parts[0]?.id ?? i}`}
+                className="space-y-0.5 py-0.5"
+              >
+                {g.parts.map((phase) => (
+                  <BuildPhase key={`phase-${phase.id}`} phase={phase} />
+                ))}
               </div>
             );
           }
-          if (g.kind === "status") {
+          if (g.kind === "summary") {
             return (
-              <BuildStatusBar
-                key={`status-${i}`}
-                action={g.part.action}
-                filesChanged={g.part.filesChanged}
-                linesDelta={g.part.linesDelta}
-                onRetry={onRetry}
-              />
+              <ResponseMarkdown key={`summary-${i}`}>
+                {summaryToMarkdown(g.lines)}
+              </ResponseMarkdown>
             );
           }
           if (g.kind === "error") {
@@ -232,6 +227,20 @@ export function AssistantMessage({
           if (g.kind === "preview") return null;
           if (g.kind === "text") {
             if (!g.text && !isStreaming) return null;
+            const hasFileMention =
+              /`[^`]+`|(?:app|components|lib|public|styles)\/[\w./-]+\.\w+/.test(
+                g.text,
+              );
+            if (hasFileMention) {
+              return (
+                <FileMentionText
+                  key={`text-${i}`}
+                  text={g.text}
+                  donePaths={finishedFiles}
+                  streaming={isStreaming}
+                />
+              );
+            }
             return (
               <ResponseMarkdown
                 key={`text-${i}`}

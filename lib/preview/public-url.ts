@@ -1,49 +1,77 @@
+import { sanitizeChatId } from "./paths";
+
 /** Loopback URL for health checks from the host machine. */
 export function previewInternalOrigin(port: number): string {
   return `http://127.0.0.1:${port}`;
 }
 
-/**
- * URL the browser iframe loads. Set PREVIEW_PUBLIC_ORIGIN=https://lucaai.app
- * and run the preview worker proxy at /_preview/:port (see services/preview-worker).
- */
-export function previewPublicOrigin(port: number): string {
-  const base = previewBasePathForPort(port);
-  if (!base) return previewInternalOrigin(port);
-  const raw = process.env.PREVIEW_PUBLIC_ORIGIN!.trim();
-  const origin = raw.replace(/\/+$/, "");
-  return `${origin}${base}/`;
+export function previewPathPrefix(): string {
+  const raw = (
+    process.env.PREVIEW_PUBLIC_PATH_PREFIX ?? "/p"
+  ).trim();
+  const prefix = raw.replace(/\/+$/, "");
+  return prefix.startsWith("/") ? prefix : `/${prefix}`;
 }
 
-/** Path prefix for Next `basePath` when iframe uses public preview URL (e.g. /_preview/4103). */
-export function previewBasePathForPort(port: number): string | null {
+export function previewPublicOriginHost(): string | null {
   const raw = process.env.PREVIEW_PUBLIC_ORIGIN?.trim();
   if (!raw) return null;
-  const prefix = (
-    process.env.PREVIEW_PUBLIC_PATH_PREFIX ?? "/_preview"
-  ).replace(/\/+$/, "");
-  return `${prefix}/${port}`;
+  return raw.replace(/\/+$/, "");
 }
 
-/** Health-check URL on loopback (includes basePath when proxied). */
-export function previewReadyCheckUrl(port: number): string {
-  const base = previewBasePathForPort(port);
+/** Path prefix for Next `basePath` — stable per chat, not per port. */
+export function previewBasePathForChat(chatId: string): string | null {
+  if (!previewPublicOriginHost()) return null;
+  return `${previewPathPrefix()}/${sanitizeChatId(chatId)}`;
+}
+
+/** @deprecated Use previewBasePathForChat — port URLs are no longer public. */
+export function previewBasePathForPort(port: number): string | null {
+  void port;
+  return null;
+}
+
+export function previewPublicUrl(chatId: string, port: number): string {
+  const base = previewBasePathForChat(chatId);
+  if (!base) return `${previewInternalOrigin(port)}/`;
+  return `${previewPublicOriginHost()}${base}/`;
+}
+
+/** Health-check URL on loopback (includes chat basePath when proxied). */
+export function previewReadyCheckUrl(port: number, chatId?: string): string {
+  const base = chatId ? previewBasePathForChat(chatId) : null;
   if (base) return `${previewInternalOrigin(port)}${base}/`;
   return `${previewInternalOrigin(port)}/`;
 }
 
-export function withPublicPreviewUrl<T extends { port: number; url: string }>(
+export function withPublicPreviewUrl<
+  T extends { chatId: string; port: number; url: string },
+>(
   info: T,
 ): T & {
   previewOrigin: string | null;
   previewBasePath: string | null;
 } {
-  const previewBasePath = previewBasePathForPort(info.port);
-  const previewOrigin =
-    process.env.PREVIEW_PUBLIC_ORIGIN?.trim().replace(/\/+$/, "") ?? null;
+  const previewBasePath = previewBasePathForChat(info.chatId);
   return {
     ...info,
-    url: previewPublicOrigin(info.port),
+    url: previewPublicUrl(info.chatId, info.port),
+    previewOrigin: previewPublicOriginHost(),
+    previewBasePath,
+  };
+}
+
+/** Stable public URL even when the preview process is asleep. */
+export function idlePublicPreviewPayload(chatId: string) {
+  const previewBasePath = previewBasePathForChat(chatId);
+  const previewOrigin = previewPublicOriginHost();
+  if (!previewBasePath || !previewOrigin) {
+    return { status: "idle" as const };
+  }
+  return {
+    status: "idle" as const,
+    chatId: sanitizeChatId(chatId),
+    url: `${previewOrigin}${previewBasePath}/`,
     previewOrigin,
     previewBasePath,
   };

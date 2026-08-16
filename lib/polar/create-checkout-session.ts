@@ -10,9 +10,61 @@ import {
 
 export type PolarCheckoutSession = {
   id: string;
-  url: string;
   clientSecret: string;
+  publishableKey: string;
+  customerEmail: string;
+  customerName: string;
+  amount: number;
+  totalAmount: number;
+  currency: string;
+  isPaymentRequired: boolean;
+  isPaymentSetupRequired: boolean;
+  isPaymentFormRequired: boolean;
+  country: string;
+  successUrl: string;
 };
+
+function toCheckoutSession(
+  checkout: {
+    id: string;
+    clientSecret?: string | null;
+    paymentProcessorMetadata?: Record<string, string>;
+    customerEmail?: string | null;
+    customerName?: string | null;
+    amount?: number | null;
+    totalAmount?: number | null;
+    currency?: string | null;
+    isPaymentRequired?: boolean;
+    isPaymentSetupRequired?: boolean;
+    isPaymentFormRequired?: boolean;
+    customerBillingAddress?: { country?: string | null } | null;
+    successUrl?: string | null;
+  },
+  user: PublicUser,
+): PolarCheckoutSession | null {
+  const clientSecret = checkout.clientSecret?.trim();
+  const publishableKey =
+    checkout.paymentProcessorMetadata?.publishable_key?.trim() ||
+    checkout.paymentProcessorMetadata?.publishableKey?.trim();
+  if (!clientSecret || !publishableKey) return null;
+
+  const base = appBaseUrl().replace(/\/$/, "");
+  return {
+    id: checkout.id,
+    clientSecret,
+    publishableKey,
+    customerEmail: checkout.customerEmail || user.email,
+    customerName: checkout.customerName || user.name,
+    amount: checkout.amount ?? 0,
+    totalAmount: checkout.totalAmount ?? checkout.amount ?? 0,
+    currency: (checkout.currency || "usd").toLowerCase(),
+    isPaymentRequired: checkout.isPaymentRequired !== false,
+    isPaymentSetupRequired: Boolean(checkout.isPaymentSetupRequired),
+    isPaymentFormRequired: checkout.isPaymentFormRequired !== false,
+    country: checkout.customerBillingAddress?.country || "PK",
+    successUrl: checkout.successUrl || `${base}/billing?checkout=success`,
+  };
+}
 
 export async function createPolarCheckoutSession(
   user: PublicUser,
@@ -23,8 +75,6 @@ export async function createPolarCheckoutSession(
   if (!token || !productId) return null;
 
   const base = appBaseUrl().replace(/\/$/, "");
-  const embedOrigin = new URL(base).origin;
-
   const polar = new Polar({
     accessToken: token,
     server: polarServer(),
@@ -36,19 +86,21 @@ export async function createPolarCheckoutSession(
     customerName: user.name,
     externalCustomerId: user.id,
     successUrl: `${base}/billing?checkout=success`,
-    returnUrl: `${base}/checkout?plan=${planId}`,
-    embedOrigin,
+    allowDiscountCodes: false,
     metadata: { userId: user.id, planId },
   });
 
-  if (!checkout.url || !checkout.clientSecret) return null;
+  const mapped = toCheckoutSession(checkout, user);
+  if (mapped) return mapped;
 
-  return {
-    id: checkout.id,
-    url: checkout.url,
+  if (!checkout.clientSecret) return null;
+  const fresh = await polar.checkouts.clientGet({
     clientSecret: checkout.clientSecret,
-  };
+  });
+  return toCheckoutSession(fresh, user);
 }
+
+export { toCheckoutSession };
 
 export function isPaidPlan(planId: string): planId is "plus" | "pro" {
   return planId === "plus" || planId === "pro";

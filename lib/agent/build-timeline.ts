@@ -121,21 +121,26 @@ export function buildStatusFromState(state: AgentState): {
 }
 
 export function summaryLinesFromText(text: string): string[] {
-  return text
-    .split(/\n+/)
-    .map((line) =>
-      line
-        .replace(/^#{1,6}\s+/, "")
-        .replace(/^[-*•]\s+/, "")
-        .replace(/\*\*/g, "")
+  const cleaned = text
+    .replace(
+      /\b(stunning|award-caliber|beautiful|gorgeous|delightful|world-class)\b/gi,
+      "",
+    )
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+  if (!cleaned) return [];
+
+  return cleaned
+    .split(/\n\s*\n/)
+    .map((block) =>
+      block
+        .split(/\n/)
+        .map((line) => line.replace(/^[-*•]\s+/, "").trim())
+        .filter(Boolean)
+        .join(" ")
+        .replace(/\s{2,}/g, " ")
         .trim(),
     )
     .filter(Boolean)
-    .filter(
-      (line) =>
-        !/\b(stunning|award-caliber|beautiful|gorgeous|delightful|world-class)\b/i.test(
-          line,
-        ),
-    )
-    .slice(0, 8);
+    .slice(0, 5);
 }

@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { openVercelConnectModal } from "@/components/preview/vercel-connect-modal";
 import { useAuthModal, type AuthMode } from "./auth-context";
 import { useAuthToast } from "./auth-toast";
 
@@ -19,6 +20,87 @@ export function AuthQueryOpener() {
       void refreshUser().then(() => closeAuth());
       showToast({ type: "success", message: "Signed in successfully." });
       router.replace(pathname || "/", { scroll: false });
+      return;
+    }
+
+    const figmaOk = params.get("figma");
+    if (figmaOk === "connected") {
+      void refreshUser();
+      showToast({
+        type: "success",
+        message: "Figma connected. Paste the file link again.",
+      });
+      const next = new URLSearchParams(params.toString());
+      next.delete("figma");
+      const qs = next.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname || "/", {
+        scroll: false,
+      });
+      return;
+    }
+
+    const vercelOk = params.get("vercel");
+    if (vercelOk === "connected") {
+      void refreshUser();
+      showToast({
+        type: "success",
+        message: "Vercel connected. You can publish now.",
+      });
+      const next = new URLSearchParams(params.toString());
+      next.delete("vercel");
+      const qs = next.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname || "/", {
+        scroll: false,
+      });
+      return;
+    }
+
+    const vercelError = params.get("vercel_error");
+    if (vercelError) {
+      const messages: Record<string, string> = {
+        not_configured:
+          "Vercel OAuth is not set up. Paste a personal token instead.",
+        not_signed_in: "Sign in first, then connect Vercel.",
+        denied: "Vercel access was cancelled.",
+        missing_code: "Vercel connect did not complete. Try again.",
+        oauth_failed: "Could not connect Vercel. Try again or paste a token.",
+      };
+      showToast({
+        type: "error",
+        message: messages[vercelError] || "Could not connect Vercel.",
+      });
+      if (vercelError === "not_configured") {
+        openVercelConnectModal();
+      }
+      const next = new URLSearchParams(params.toString());
+      next.delete("vercel_error");
+      const qs = next.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname || "/", {
+        scroll: false,
+      });
+      return;
+    }
+
+    const figmaError = params.get("figma_error");
+    if (figmaError) {
+      const messages: Record<string, string> = {
+        not_configured: "Figma connect is not set up on the server yet.",
+        plan_required: "Figma import is on Plus and Pro. Upgrade to connect.",
+        not_signed_in: "Sign in first, then connect Figma.",
+        denied: "Figma access was cancelled.",
+        missing_code: "Figma connect did not complete. Try again.",
+        oauth_failed: "Could not connect Figma. Try again.",
+      };
+      showToast({
+        type: "error",
+        message: messages[figmaError] || "Could not connect Figma.",
+      });
+      const next = new URLSearchParams(params.toString());
+      next.delete("figma_error");
+      const qs = next.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname || "/", {
+        scroll: false,
+      });
       return;
     }
 

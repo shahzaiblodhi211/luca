@@ -88,7 +88,7 @@ npm run preview-worker   # or pm2 — only the preview-worker app
 
 ```env
 PREVIEW_PUBLIC_ORIGIN=https://preview.lucaai.app
-PREVIEW_PUBLIC_PATH_PREFIX=/_preview
+PREVIEW_PUBLIC_PATH_PREFIX=/p
 PREVIEW_WORKER_PORT=3001
 PREVIEW_WORKER_HOST=127.0.0.1
 
@@ -127,7 +127,7 @@ Or run the full `ecosystem` if Luca ever runs on the same machine.
 1. Browser on **lucaai.app** calls **`/api/preview`** (same origin).
 2. Vercel **`app/api/preview`** forwards to **`https://preview.lucaai.app/api/preview`** when `PREVIEW_WORKER_URL` is set.
 3. Worker starts `next dev` on loopback and returns iframe URL:  
-   **`https://preview.lucaai.app/_preview/4103/`** …
+   **`https://preview.lucaai.app/p/{chatId}/`** …
 4. Browser loads that URL on the **preview** subdomain (Caddy → worker proxy → port).
 
 ---

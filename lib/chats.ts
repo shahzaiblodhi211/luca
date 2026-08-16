@@ -24,11 +24,44 @@ import {
 import { getImageById, toDataUrl } from "./image-store";
 import { cleanupChatPreview } from "./preview/cleanup-chat";
 
+function toChatSummary(d: {
+  _id: string;
+  title: string;
+  projectId?: string;
+  files?: unknown;
+  createdAt: Date;
+  updatedAt: Date;
+}): ChatSummary {
+  const hasFiles = Array.isArray(d.files) && d.files.length > 0;
+  const projectId =
+    typeof d.projectId === "string" && d.projectId.trim()
+      ? d.projectId.trim()
+      : null;
+  return {
+    id: d._id,
+    title: d.title,
+    createdAt: new Date(d.createdAt).toISOString(),
+    updatedAt: new Date(d.updatedAt).toISOString(),
+    projectId,
+    hasProject: hasFiles || Boolean(projectId),
+  };
+}
+
 export async function listChats(
   userId: string,
-  limit = 100,
+  limit = 10,
 ): Promise<ChatSummary[]> {
-  if (!userId) return [];
+  const page = await listChatsPage(userId, { limit, offset: 0 });
+  return page.chats;
+}
+
+export async function listChatsPage(
+  userId: string,
+  opts?: { limit?: number; offset?: number },
+): Promise<{ chats: ChatSummary[]; hasMore: boolean }> {
+  if (!userId) return { chats: [], hasMore: false };
+  const limit = Math.min(Math.max(opts?.limit ?? 10, 1), 40);
+  const offset = Math.max(opts?.offset ?? 0, 0);
   const col = await getChatsCollection();
   const docs = await col
     .find(
@@ -44,24 +77,15 @@ export async function listChats(
       },
     )
     .sort({ updatedAt: -1 })
-    .limit(limit)
+    .skip(offset)
+    .limit(limit + 1)
     .toArray();
 
-  return docs.map((d) => {
-    const hasFiles = Array.isArray(d.files) && d.files.length > 0;
-    const projectId =
-      typeof d.projectId === "string" && d.projectId.trim()
-        ? d.projectId.trim()
-        : null;
-    return {
-      id: d._id,
-      title: d.title,
-      createdAt: new Date(d.createdAt).toISOString(),
-      updatedAt: new Date(d.updatedAt).toISOString(),
-      projectId,
-      hasProject: hasFiles || Boolean(projectId),
-    };
-  });
+  const hasMore = docs.length > limit;
+  return {
+    chats: docs.slice(0, limit).map(toChatSummary),
+    hasMore,
+  };
 }
 
 /** Chats where Luca generated code files (real projects only). */

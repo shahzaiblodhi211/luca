@@ -11,7 +11,7 @@ import {
   type ThinkingLevel,
 } from "@/lib/thinking-level";
 import { resolveGeminiThinkingLevel } from "@/lib/agent/resolve-thinking-level";
-import { AGENT_TOOL_DECLARATIONS } from "./tools";
+import { agentToolDeclarationsFor } from "./tools";
 
 export type GeminiPart = {
   text?: string;
@@ -197,6 +197,8 @@ function raceWithTimeout<T>(
 export type GeminiStreamOptions = {
   /** When false, native text + thought stream (Q&A). When true, agent tools (builds). */
   useAgentTools?: boolean;
+  /** Figma canvas is already written — hide rewrite tools so the model cannot loop. */
+  figmaBuild?: boolean;
 };
 
 /**
@@ -230,7 +232,9 @@ export async function streamGeminiGenerateContent(
         ? {
             tools: [
               {
-                functionDeclarations: AGENT_TOOL_DECLARATIONS as never,
+                functionDeclarations: agentToolDeclarationsFor(
+                  Boolean(options.figmaBuild),
+                ) as never,
               },
             ],
             toolConfig: {

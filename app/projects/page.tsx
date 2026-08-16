@@ -12,7 +12,7 @@ export default async function ProjectsRoute() {
 
   const [projects, chats] = await Promise.all([
     listProjects(user.id),
-    listChats(user.id),
+    listChats(user.id, 10),
   ]);
 
   return (

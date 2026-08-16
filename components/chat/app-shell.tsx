@@ -13,6 +13,7 @@ import { AuthQueryOpener } from "@/components/auth/auth-query-opener";
 import { PlansProvider } from "@/components/billing/plans-modal";
 
 import { PlansQueryOpener } from "@/components/billing/plans-query-opener";
+import { VercelConnectHost } from "@/components/preview/vercel-connect-modal";
 
 import { Sidebar } from "./sidebar";
 
@@ -61,6 +62,7 @@ export function AppShell({
           </Suspense>
 
           <AuthModal />
+          <VercelConnectHost />
 
         </PlansProvider>
 

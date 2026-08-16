@@ -6,6 +6,9 @@ import {
   extractUrls,
   wantsCloneOrInspect,
 } from "./inspect-url";
+import { extractFigmaUrls } from "./figma";
+import { filesHaveFigmaCanvas } from "./figma-canvas";
+import { mergeFigmaProject, type FigmaFrameKind } from "./figma-frame";
 import { saveAttachment } from "./attachments";
 
 const EDIT_RULES = `
@@ -65,6 +68,31 @@ export function formatProjectFiles(
   ].join("\n");
 }
 
+function formatFigmaSkeletonFiles(
+  files: ProjectFile[],
+  projectId: string | null,
+): string {
+  const blocks = files
+    .map((f) => {
+      const lang = f.language || (f.path.endsWith(".css") ? "css" : "tsx");
+      return `\`\`\`${lang} file="${f.path}"\n${f.code}\n\`\`\``;
+    })
+    .join("\n\n");
+  return [
+    "FIGMA DESKTOP SKELETON — these files are already in the project.",
+    "Compile each Figma URL to FIGMA_ROUTE. A detail/product frame must NOT replace app/page.tsx.",
+    "Do not change desktop width/height/left/top. Do not replace or shuffle asset URLs.",
+    "Do not invent extra shop/about/journal pages unless that Figma frame or the user asked for them.",
+    "New pages the user asks for: write_file new routes that reuse lib/catalog.ts. Galleries, tabs, qty must actually work.",
+    "",
+    `CURRENT PROJECT id="${projectId || "project"}"`,
+    "",
+    "CURRENT PROJECT FILES:",
+    "",
+    blocks,
+  ].join("\n");
+}
+
 function formatAssistantHistory(message: ChatMessage): string {
   if (message.content.trim()) {
     return message.content;
@@ -98,11 +126,19 @@ function isAdditiveRequest(text: string): boolean {
   );
 }
 
+function wantsFigmaAppSurface(text: string): boolean {
+  return /\b(add|create|make|build|new|wire)\b.{0,80}\b(page|pages|route|shop|product|pdp|about|journal|gallery|tabs?|cart|checkout)\b|\b(product page|product view|product detail|shop page|new page)\b|\b(tabs?|galler(?:y|ies))\b.{0,40}\b(work|functional|click|open)\b|\bmake (the )?(tabs?|galler(?:y|ies)|product).{0,20}(work|functional)/i.test(
+    text,
+  );
+}
+
 export type ProjectContextResult = {
   turns: ChatTurn[];
   /** Screenshots saved for chat UI (also sent to the model via inlineImages). */
   cloneAttachments: ChatAttachment[];
   cloneSourceUrl?: string;
+  figmaSkeleton?: ProjectFile[];
+  figmaKind?: FigmaFrameKind;
 };
 
 async function persistCloneScreenshots(
@@ -122,7 +158,9 @@ async function persistCloneScreenshots(
         }
       })();
       const saved = await saveAttachment({
-        name: `clone-screenshot-${host}${images.length > 1 ? `-${i + 1}` : ""}.jpg`,
+        name: /^https?:\/\/([^/]*figma\.com)/i.test(sourceUrl || "")
+          ? `clone-screenshot-figma${images.length > 1 ? `-${i + 1}` : ""}.jpg`
+          : `clone-screenshot-${host}${images.length > 1 ? `-${i + 1}` : ""}.jpg`,
         mimeType: img.mimeType || "image/jpeg",
         size: buffer.byteLength,
         buffer,
@@ -138,6 +176,13 @@ async function persistCloneScreenshots(
 
 export async function buildTurnsWithProjectContext(
   chat: ChatDoc,
+  opts?: {
+    figmaAccessToken?: string | null;
+    refreshFigmaToken?: () => Promise<string | null>;
+    figmaHandle?: string;
+    figmaPlanAllowed?: boolean;
+    onFigmaInspectSuccess?: () => Promise<void>;
+  },
 ): Promise<ProjectContextResult> {
   const turns: ChatTurn[] = chat.messages.map((m) => ({
     role: m.role,
@@ -154,18 +199,39 @@ export async function buildTurnsWithProjectContext(
   let userText = last.content;
   let inlineImages: ChatTurn["inlineImages"] = [];
   let chatImages: ChatTurn["inlineImages"] = [];
+  let figmaSkeleton: ProjectFile[] = [];
+  let figmaKind: FigmaFrameKind | undefined;
   const urls = extractUrls(last.content);
+  const figmaUrls = extractFigmaUrls(last.content);
   const cloneRequest = wantsCloneOrInspect(last.content) && urls.length > 0;
   const cloneSourceUrl = urls[0];
+  const existingHome = filesHaveFigmaCanvas(chat.files);
 
   if (urls.length) {
     try {
-      const enriched = await enrichTextWithUrlInspections(userText);
+      const enriched = await enrichTextWithUrlInspections(userText, {
+        figmaAccessToken: opts?.figmaAccessToken,
+        refreshFigmaToken: opts?.refreshFigmaToken,
+        figmaHandle: opts?.figmaHandle,
+        existingHome,
+        figmaPlanAllowed: opts?.figmaPlanAllowed,
+        onFigmaInspectSuccess: opts?.onFigmaInspectSuccess,
+      });
       userText = enriched.text;
       inlineImages = enriched.inlineImages;
       chatImages = enriched.chatImages?.length
         ? enriched.chatImages
         : enriched.inlineImages;
+      figmaKind = enriched.skeletonKind;
+      if (enriched.skeletonFiles?.length) {
+        figmaSkeleton = existingHome
+          ? mergeFigmaProject(
+              chat.files,
+              enriched.skeletonFiles,
+              enriched.skeletonKind || "page",
+            )
+          : enriched.skeletonFiles;
+      }
     } catch (err) {
       console.error("[project-context] url inspect failed", err);
     }
@@ -180,6 +246,12 @@ export async function buildTurnsWithProjectContext(
   }
 
   const parts: string[] = [userText];
+  const figmaBlocked =
+    /FIGMA_NEEDS_CONNECT:\s*1|FIGMA_ACCESS_DENIED:\s*1|FIGMA_TOKEN_INVALID:\s*1|FIGMA_PLAN_REQUIRED:\s*1|# FIGMA BLOCKED/i.test(
+      userText,
+    );
+  const figmaReady = /FIGMA_BUILD:\s*1/i.test(userText) && !figmaBlocked;
+  const figmaCanvasLive = filesHaveFigmaCanvas(chat.files);
 
   if (isAdditiveRequest(last.content) && chat.files?.length && !cloneRequest) {
     parts.push(
@@ -187,8 +259,75 @@ export async function buildTurnsWithProjectContext(
     );
   }
 
-  // Fresh clone: do NOT feed prior messy project files — they poison fidelity.
-  if (cloneRequest) {
+  // Fresh clone / Figma: do NOT feed prior messy project files — they poison fidelity.
+  if (figmaBlocked || (figmaUrls.length > 0 && !figmaReady)) {
+    parts.push(
+      [
+        "STOP — Figma is not readable. This is not a build.",
+        "Do not call set_project, write_file, write_image, or invent a store.",
+        "§5 commerce / theme invention is OFF.",
+        "message_user one short line: invite the connected Figma account as Viewer on the file, then paste the frame link again.",
+        "Then finish.",
+      ].join(" "),
+    );
+  } else if (figmaReady) {
+    if (figmaCanvasLive && figmaKind && figmaKind !== "home") {
+      parts.push(
+        [
+          "FIGMA_PAGE: 1",
+          `FIGMA_KIND: ${figmaKind}`,
+          "Home canvas already exists. This Figma URL is an additional page.",
+          "Do not replace app/page.tsx, layout, or globals.",
+          "Keep every existing route. Overlay only the new page + catalog merge.",
+        ].join("\n"),
+      );
+    } else {
+      parts.push(
+        [
+          "FIGMA → CODE — pixel match the frame:",
+          "Screenshot is vision-only. Do not put it in the page as an image or background.",
+          "Build the LAYER TREE: flex when it says flex-row/flex-col (use listed gap/pad px); position:absolute + left/top from @x,y when it says absolute-children.",
+          "NAV and BUTTONS are exact. Do not rename labels. LOGO asset is a visible img — never a hand-lettered SVG or sr-only.",
+          "ASSETS: each URL is locked to one named layer and used once. BG = background-image. PHOTO/ICON/LOGO = <img> at the listed size. Do not shuffle or reuse a hero shot as a video thumb.",
+          "No extra chrome (sticky/blur, borders, gradients, card boxes on cutouts) unless the tree lists it.",
+          "Working page: keep the artboard boxes. Optional: nav click + button handlers. Do not stack siblings or change left/top/width/height.",
+          "DESKTOP CANVAS is one absolute artboard. Do not invent a card grid, max-w-7xl, or extra shop/about pages.",
+        ].join(" "),
+      );
+    }
+    if (figmaSkeleton.length) {
+      parts.push(formatFigmaSkeletonFiles(figmaSkeleton, chat.projectId));
+    }
+  } else if (figmaCanvasLive && !figmaUrls.length) {
+    if (wantsFigmaAppSurface(last.content)) {
+      parts.push(
+        [
+          "FIGMA_BUILD: 1",
+          "FIGMA_APP: 1",
+          "Home canvas is locked. The user asked for a real page or working control.",
+          "write_file NEW routes/components only. Never rewrite app/page.tsx, app/layout.tsx, or app/globals.css.",
+          "Products and posts live in lib/catalog.ts — reuse those records. Do not invent SKUs or Pexels photos.",
+          "Wire nav/cards to the new routes. Product pages need a working gallery, tabs, qty, and add-to-cart.",
+          "Match the canvas colors and type. Then finish.",
+        ].join("\n"),
+      );
+    } else {
+      parts.push(
+        [
+          "FIGMA_BUILD: 1",
+          "FIGMA_EDIT: 1",
+          "The preview is already the Figma canvas. Do a surgical edit for this request only.",
+          "Keep every left/top/width/height, every img src, every font-family and color.",
+          "edit_file the smallest snippet. Never write_file app/page.tsx, layout, or globals.css.",
+          "If they asked for a new page, write_file that route from lib/catalog.ts instead of restacking home.",
+          "Do not restack into sections, max-w-7xl, or a new card grid. Then finish.",
+        ].join("\n"),
+      );
+    }
+    parts.push(
+      formatProjectFiles(chat.files, chat.projectId, chat.packages),
+    );
+  } else if (cloneRequest) {
     parts.push(
       [
         "HOMEPAGE CLONE — screenshot-first:",
@@ -205,7 +344,10 @@ export async function buildTurnsWithProjectContext(
     );
   }
 
-  if (last.attachments?.length || cloneAttachments.length) {
+  if (
+    !figmaBlocked &&
+    (last.attachments?.length || cloneAttachments.length)
+  ) {
     parts.push(
       [
         "Images are attached with this message (user uploads and/or the captured page screenshot).",
@@ -216,7 +358,9 @@ export async function buildTurnsWithProjectContext(
   }
 
   if (
-    /HOMEPAGE CLONE BRIEF|LOCKED DESIGN SYSTEM|site-header|PIXEL-FAITHFUL CLONE/i.test(
+    !figmaBlocked &&
+    !figmaReady &&
+    /HOMEPAGE CLONE BRIEF|LOCKED DESIGN SYSTEM|PIXEL-FAITHFUL CLONE/i.test(
       userText,
     )
   ) {
@@ -245,5 +389,7 @@ export async function buildTurnsWithProjectContext(
     turns,
     cloneAttachments,
     cloneSourceUrl: cloneRequest ? cloneSourceUrl : undefined,
+    figmaSkeleton: figmaSkeleton.length ? figmaSkeleton : undefined,
+    figmaKind,
   };
 }

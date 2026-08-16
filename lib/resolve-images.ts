@@ -118,6 +118,22 @@ export async function resolveImageJobs(jobs: ImageJob[]): Promise<{
       let dataUrl = job.dataUrl;
       let apiUrl = job.url;
 
+      if (apiUrl?.startsWith("http://") || apiUrl?.startsWith("https://")) {
+        const ref: ChatImageRef = {
+          id: id || job.path,
+          path: publicPath,
+          query: job.query,
+          mimeType: "image/jpeg",
+          url: apiUrl,
+        };
+        images.push(ref);
+        dataUrls[publicPath] = apiUrl;
+        dataUrls[job.path] = apiUrl;
+        dataUrls[job.path.replace(/^public\//, "/")] = apiUrl;
+        dataUrls[`public${publicPath}`] = apiUrl;
+        continue;
+      }
+
       if (apiUrl?.startsWith("/api/images/")) {
         id = apiUrl.slice("/api/images/".length);
       }

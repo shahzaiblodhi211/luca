@@ -1,5 +1,10 @@
-# Vercel build — optional; install already skips Playwright via SKIP_PLAYWRIGHT=1 in project settings
+.tmp
+tmp-shane-review
+gemini-keys.txt
+*.keys.txt
+.gemini-key-state.json
 .preview-runtime
 .preview-workspaces
-services/preview-worker
-deploy
+deploy/vercel-env-import.env
+.env*
+!.env.example

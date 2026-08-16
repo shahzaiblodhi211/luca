@@ -20,7 +20,7 @@ export default async function ChatPage({ params, searchParams }: Props) {
   const sp = await searchParams;
   const [chat, chats] = await Promise.all([
     getChat(id, user.id),
-    listChats(user.id),
+    listChats(user.id, 10),
   ]);
 
   if (!chat) notFound();

@@ -10,7 +10,7 @@ export default async function BillingPage() {
   const user = await getSessionUser();
   if (!user) redirect("/?auth=login&return=/billing");
 
-  const chats = await listChats(user.id);
+  const chats = await listChats(user.id, 10);
 
   return (
     <AppShell initialChats={chats}>

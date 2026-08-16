@@ -21,10 +21,13 @@ import {
 } from "@/lib/chats";
 import { resolveAttachmentMetas } from "@/lib/attachments";
 import { buildTurnsWithProjectContext } from "@/lib/project-context";
+import { filesHaveFigmaCanvas } from "@/lib/figma-canvas";
 import { parseThinkingLevel } from "@/lib/thinking-level";
 import {
   BillingError,
+  canUseFigmaForPlan,
   capThinkingForUser,
+  consumeFigmaImport,
   debitChatCredit,
   getGeminiModelForUser,
   refundChatCredit,
@@ -109,7 +112,7 @@ function applyEventToAccumulator(event: AgentStreamEvent, acc: Acc) {
       } else {
         acc.timeline.unshift({
           type: "thinking",
-          text: "",
+          text: event.text || "",
           durationSec: event.durationSec,
         });
       }
@@ -363,6 +366,8 @@ function partsFromAcc(acc: Acc) {
     phaseSeq: 1,
     finished: true,
     cloneRequiredTokens: [],
+    figmaBuild: false,
+    figmaBlocked: false,
     editFailStreak: 0,
     editFailPath: "",
     envRequested: false,
@@ -468,8 +473,31 @@ export async function runChatGeneration(
     }
   })();
 
-  const { turns, cloneAttachments, cloneSourceUrl } =
-    await buildTurnsWithProjectContext(chat);
+  const { extractFigmaUrls } = await import("@/lib/figma-url");
+  if (extractFigmaUrls(message).length) {
+    onEvent({
+      type: "thinking",
+      text: "Opening the Figma frame and downloading assets…",
+    });
+  }
+
+  const { getFigmaAccessTokenForUser, forceRefreshFigmaToken } = await import(
+    "@/lib/figma-connection"
+  );
+  const figmaAccessToken = await getFigmaAccessTokenForUser(user.id);
+  const figmaHandle = userDoc.figma?.handle;
+  const figmaPlanAllowed = Boolean(
+    userDoc.billingExempt || canUseFigmaForPlan(userDoc.planId ?? "free"),
+  );
+
+  const { turns, cloneAttachments, cloneSourceUrl, figmaSkeleton } =
+    await buildTurnsWithProjectContext(chat, {
+      figmaAccessToken,
+      refreshFigmaToken: () => forceRefreshFigmaToken(user.id),
+      figmaHandle,
+      figmaPlanAllowed,
+      onFigmaInspectSuccess: () => consumeFigmaImport(user.id),
+    });
 
   if (cloneAttachments?.length) {
     onEvent({
@@ -479,6 +507,19 @@ export async function runChatGeneration(
     });
   }
 
+  if (
+    figmaSkeleton?.length &&
+    chat.files.length &&
+    !filesHaveFigmaCanvas(chat.files)
+  ) {
+    const keep = new Set(figmaSkeleton.map((f) => f.path));
+    for (const f of chat.files) {
+      if (!keep.has(f.path)) {
+        onEvent({ type: "delete", path: f.path });
+      }
+    }
+  }
+
   const model = getGeminiModelForUser(userDoc, lucaModelTier);
 
   try {
@@ -486,7 +527,7 @@ export async function runChatGeneration(
       streamAgentEvents(
         turns,
         chat.projectId,
-        chat.files,
+        figmaSkeleton?.length ? figmaSkeleton : chat.files,
         chat.packages ?? null,
         thinkingLevel,
       ),
@@ -503,10 +544,19 @@ export async function runChatGeneration(
     const acc: Acc = {
     content: "",
     projectId: chat.projectId,
-    files: new Map(chat.files.map((f) => [f.path, f])),
+    files: new Map(
+      (figmaSkeleton?.length ? figmaSkeleton : chat.files).map((f) => [
+        f.path,
+        f,
+      ]),
+    ),
     packages: new Map(Object.entries(chat.packages ?? {})),
     images: [],
-    deleted: [],
+    deleted: figmaSkeleton?.length && !filesHaveFigmaCanvas(chat.files)
+      ? chat.files
+          .filter((f) => !figmaSkeleton.some((s) => s.path === f.path))
+          .map((f) => f.path)
+      : [],
     thinking: [],
     texts: [],
     actions: [],
