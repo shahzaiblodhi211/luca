@@ -172,11 +172,10 @@ function fromSdkPart(part: GenaiPart): GeminiPart {
 }
 
 /**
- * Bail to the next API key if Gemini never yields a first chunk.
- * Keep this generous — 8s caused fake "503 capacity" cascades under load
- * (model still thinking / queueing) and burned the whole pool for nothing.
+ * Bail if Gemini never yields a first chunk. Instant 503s rotate immediately;
+ * hung connects should not sit for 45s while Ultra is in high demand.
  */
-const FIRST_CHUNK_TIMEOUT_MS = 45_000;
+const FIRST_CHUNK_TIMEOUT_MS = 16_000;
 
 function raceWithTimeout<T>(
   promise: Promise<T>,
@@ -199,6 +198,8 @@ export type GeminiStreamOptions = {
   useAgentTools?: boolean;
   /** Figma canvas is already written — hide rewrite tools so the model cannot loop. */
   figmaBuild?: boolean;
+  /** Override ALS / env model (used for high-demand fallback). */
+  model?: string;
 };
 
 /**
@@ -213,7 +214,7 @@ export async function streamGeminiGenerateContent(
   options: GeminiStreamOptions = {},
 ): Promise<GeminiStreamResult> {
   const ai = new GoogleGenAI({ apiKey });
-  const model = getGeminiModel();
+  const model = options.model?.trim() || getGeminiModel();
   const useAgentTools = options.useAgentTools !== false;
   const apiThinkLevel = toSdkThinkingLevel(model, thinkingLevel);
 

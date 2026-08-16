@@ -13,6 +13,7 @@ import {
 } from "@/components/chat/prompt-form";
 import { thinkingLevelForPlan } from "@/lib/billing/plans";
 import type { PlanId } from "@/lib/billing/plans";
+import { isOutOfSpendableCredits } from "@/lib/billing/types";
 import {
   readStoredLucaModelTier,
   resolveLucaModelTier,
@@ -65,6 +66,10 @@ function HomeHero() {
     if (!user) {
       openAuth("login");
       throw new Error("Sign in to start a chat.");
+    }
+    if (isOutOfSpendableCredits(billing)) {
+      openPlans();
+      throw new Error("Daily credit limit reached. Upgrade your plan.");
     }
     const res = await fetch("/api/chats", {
       method: "POST",

@@ -510,7 +510,7 @@ export const AGENT_TOOL_DECLARATIONS = [
   {
     name: "finish",
     description:
-      "End the turn after shipping the full ask. summary = a short explanation of what you built (2–4 paragraphs, like a chat reply). What it is, what you can do, design direction, one thing to try. No bullet lists, no marketing adjectives.",
+      "End the turn after shipping. Required on the last file batch. summary = 2–4 short paragraphs like a chat reply: 'Your stopwatch is ready.' then **Brand** is … then one line to try in preview. No bullets.",
     parameters: {
       type: "object",
       properties: {

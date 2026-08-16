@@ -86,7 +86,26 @@ function collapsePhases(parts: BuildPhasePart[]): BuildPhasePart[] {
     }
     byKey.set(key, { ...prev, files, commands });
   }
-  return order.map((k) => byKey.get(k)!);
+  const collapsed = order.map((k) => byKey.get(k)!);
+  return collapsed.sort((a, b) => {
+    const aBusy = a.files.some((f) => f.status === "in_progress") ||
+      a.commands.some((c) => c.status === "in_progress")
+      ? 1
+      : 0;
+    const bBusy = b.files.some((f) => f.status === "in_progress") ||
+      b.commands.some((c) => c.status === "in_progress")
+      ? 1
+      : 0;
+    return aBusy - bBusy;
+  });
+}
+
+function phasesStillCreating(parts: BuildPhasePart[]): boolean {
+  return parts.some(
+    (p) =>
+      p.files.some((f) => f.status === "in_progress") ||
+      p.commands.some((c) => c.status === "in_progress"),
+  );
 }
 
 function groupParts(parts: AssistantPart[]): Group[] {
@@ -116,46 +135,50 @@ function groupParts(parts: AssistantPart[]): Group[] {
   }
   if (think?.text?.trim()) out.push({ kind: "thinking", part: think });
 
+  const leadingText: string[] = [];
+  const phases: BuildPhasePart[] = [];
+  const trailing: Group[] = [];
+  let seenPhase = false;
+
   for (const part of parts) {
     if (part.type === "thinking") continue;
     if (part.type === "phase") {
-      const last = out[out.length - 1];
-      if (last?.kind === "phases") {
-        last.parts.push(part);
-      } else {
-        out.push({ kind: "phases", parts: [part] });
-      }
+      seenPhase = true;
+      phases.push(part);
       continue;
     }
     if (part.type === "summary") {
-      out.push({ kind: "summary", lines: part.lines });
+      trailing.push({ kind: "summary", lines: part.lines });
       continue;
     }
     if (part.type === "status") continue;
     if (part.type === "error") {
-      out.push({ kind: "error", message: part.message });
+      trailing.push({ kind: "error", message: part.message });
       continue;
     }
     if (part.type === "preview" && part.ready) {
-      out.push({ kind: "preview" });
+      trailing.push({ kind: "preview" });
       continue;
     }
     if (part.type === "text") {
       const cleaned = sanitizeVisibleReply(part.text);
-      if (!cleaned.trim() && out[out.length - 1]?.kind !== "text") {
-        out.push({ kind: "text", text: "" });
-        continue;
-      }
       if (!cleaned.trim()) continue;
-      out.push({ kind: "text", text: cleaned });
+      if (!seenPhase) leadingText.push(cleaned);
+      else trailing.push({ kind: "text", text: cleaned });
       continue;
     }
-    if (part.type === "actions") out.push({ kind: "actions", part });
-    if (part.type === "env_request") out.push({ kind: "env_request", part });
+    if (part.type === "actions") trailing.push({ kind: "actions", part });
+    if (part.type === "env_request") trailing.push({ kind: "env_request", part });
     if (part.type === "generated_image") {
-      out.push({ kind: "generated_image", part });
+      trailing.push({ kind: "generated_image", part });
     }
   }
+
+  if (leadingText.length) {
+    out.push({ kind: "text", text: leadingText.join("\n\n") });
+  }
+  if (phases.length) out.push({ kind: "phases", parts: phases });
+  out.push(...trailing);
   return out;
 }
 
@@ -197,6 +220,18 @@ export function AssistantMessage({
     }
 
     const finishedFiles = doneFilePaths(parts);
+    const creatingFiles = groups.some(
+      (g) => g.kind === "phases" && phasesStillCreating(g.parts),
+    );
+    const visibleGroups =
+      isStreaming && creatingFiles
+        ? groups.filter((g, i) => {
+            const phaseIdx = groups.findIndex((x) => x.kind === "phases");
+            if (phaseIdx < 0) return true;
+            if (i <= phaseIdx) return true;
+            return g.kind !== "text";
+          })
+        : groups;
 
     const copyText = [
       ...groups
@@ -214,7 +249,7 @@ export function AssistantMessage({
 
     return (
       <div className="space-y-3">
-        {groups.map((g, i) => {
+        {visibleGroups.map((g, i) => {
           if (g.kind === "thinking") {
             if (!g.part.text?.trim() && !isStreaming) return null;
             return (
@@ -276,7 +311,7 @@ export function AssistantMessage({
             return (
               <ResponseMarkdown
                 key={`text-${i}`}
-                isStreaming={isStreaming && i === groups.length - 1}
+                isStreaming={isStreaming && i === visibleGroups.length - 1}
               >
                 {g.text}
               </ResponseMarkdown>
@@ -343,6 +378,22 @@ export function AssistantMessage({
           }
           return null;
         })}
+        {isStreaming &&
+        groups.some(
+          (g) => g.kind === "thinking" && g.part.durationSec != null,
+        ) &&
+        !groups.some((g) => g.kind === "phases") &&
+        !groups.some((g) => g.kind === "summary") ? (
+          <div className="flex items-center gap-1.5 py-1">
+            <Shimmer
+              as="span"
+              className="min-w-0 text-[14.5px] font-normal"
+              duration={1.1}
+            >
+              Creating files
+            </Shimmer>
+          </div>
+        ) : null}
         {!isStreaming ? (
           <MessageToolbarActions content={copyText} onRetry={onRetry} />
         ) : null}

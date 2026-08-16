@@ -25,6 +25,7 @@ import { useAuthToast } from "@/components/auth/auth-toast";
 import { usePlansModal } from "@/components/billing/plans-modal";
 import type { PlanId } from "@/lib/billing/plans";
 import { thinkingLevelForPlan } from "@/lib/billing/plans";
+import { isOutOfSpendableCredits } from "@/lib/billing/types";
 import {
   parseLucaModelTier,
   readStoredLucaModelTier,
@@ -110,6 +111,11 @@ export function PromptForm({
   const { showToast } = useAuthToast();
   const { openPlans } = usePlansModal();
   const planId = (billing?.planId ?? "free") as PlanId;
+  const outOfCredits = isOutOfSpendableCredits(billing);
+
+  useEffect(() => {
+    if (outOfCredits) openPlans();
+  }, [outOfCredits, openPlans]);
 
   const [value, setValue] = useState("");
   const [pending, setPending] = useState(false);
@@ -262,6 +268,10 @@ export function PromptForm({
     const trimmed = value.trim();
     const files = pendingFilesRef.current;
     if ((!trimmed && !files.length) || disabled || pending) return;
+    if (outOfCredits) {
+      openPlans();
+      return;
+    }
     if (files.some((f) => f.status === "uploading")) return;
     if (files.some((f) => f.status === "error")) {
       showToast({
@@ -298,7 +308,7 @@ export function PromptForm({
   }
 
   const anyUploading = pendingFiles.some((f) => f.status === "uploading");
-  const canSend =
+  const readyToSend =
     (value.trim().length > 0 ||
       (pendingFiles.length > 0 &&
         pendingFiles.every((f) => f.status === "ready"))) &&
@@ -306,6 +316,7 @@ export function PromptForm({
     !pending &&
     !anyUploading &&
     !voice.recording;
+  const canSend = readyToSend && !outOfCredits;
 
   const showBuildPlaceholder =
     Boolean(animatedBuildPlaceholder) &&
@@ -612,8 +623,14 @@ export function PromptForm({
               ) : (
                 <button
                   type="button"
-                  disabled={!canSend}
-                  onClick={() => void handleSubmit()}
+                  disabled={!readyToSend}
+                  onClick={() => {
+                    if (outOfCredits) {
+                      openPlans();
+                      return;
+                    }
+                    void handleSubmit();
+                  }}
                   className={cn(
                     "inline-flex h-9 w-9 items-center justify-center rounded-full transition-colors",
                     canSend
@@ -630,11 +647,17 @@ export function PromptForm({
                   )}
                 </button>
               )}
-              {streaming && canSend ? (
+              {streaming && readyToSend ? (
                 <button
                   type="button"
-                  disabled={!canSend}
-                  onClick={() => void handleSubmit()}
+                  disabled={!readyToSend}
+                  onClick={() => {
+                    if (outOfCredits) {
+                      openPlans();
+                      return;
+                    }
+                    void handleSubmit();
+                  }}
                   className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-emerald-600 text-white transition-colors hover:bg-emerald-500 active:bg-emerald-700 disabled:cursor-not-allowed"
                   aria-label="Add to queue"
                 >

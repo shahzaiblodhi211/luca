@@ -82,6 +82,18 @@ export function geminiModelForLucaTier(tier: LucaModelTier): string {
   return LUCA_MODEL_TIERS[tier].apiModel;
 }
 
+/** When a model is 503 / high-demand, try these next (same keys). */
+export function geminiModelFallbacks(model: string): string[] {
+  const id = model.trim();
+  if (id === LUCA_MODEL_TIERS.ultra.apiModel || /3\.7/.test(id)) {
+    return [LUCA_MODEL_TIERS.turbo.apiModel, LUCA_MODEL_TIERS.spark.apiModel];
+  }
+  if (id === LUCA_MODEL_TIERS.turbo.apiModel || /3\.6/.test(id)) {
+    return [LUCA_MODEL_TIERS.spark.apiModel];
+  }
+  return [];
+}
+
 const STORAGE_KEY = "luca-model-tier";
 
 export function readStoredLucaModelTier(

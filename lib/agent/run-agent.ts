@@ -2,7 +2,6 @@ import {
   formatGeminiUserError,
   geminiKeyPoolStats,
   getGeminiKeys,
-  hasAvailableGeminiKey,
   isCapacityMessage,
   isDailyQuotaMessage,
   isRateLimitMessage,
@@ -13,9 +12,9 @@ import {
   parseGeminiStatus,
   pickGeminiKeyIndex,
   releaseGeminiKey,
-  rotateGeminiKey,
 } from "@/lib/gemini-keys";
 import { getGeminiModel, toGeminiContents, type ChatTurn } from "@/lib/gemini";
+import { geminiModelFallbacks } from "@/lib/luca-model-tier";
 import { formatThinkingText } from "@/lib/agent/format-thinking-text";
 import {
   isReasoningLeakParagraph,
@@ -39,6 +38,7 @@ import {
 import { sanitizeGeneratedCode } from "@/lib/agent/sanitize-code";
 import { chunkForStream, emitPacedText } from "@/lib/agent/pace-text";
 import {
+  ensureBuildSummary,
   ensurePhaseOnTimeline,
   upsertPhaseFile,
 } from "@/lib/agent/build-timeline";
@@ -103,42 +103,42 @@ async function callModelStream(
   useAgentTools = true,
   figmaBuild = false,
 ): Promise<GeminiStreamResult> {
-  console.info(`[agent] provider=gemini model=${getGeminiModel()}`);
+  let model = getGeminiModel();
+  const fallbacks = geminiModelFallbacks(model);
+  console.info(`[agent] provider=gemini model=${model}`);
 
   let lastError = "All Gemini keys failed";
   let attempts = 0;
+  let demandFails = 0;
   const skipped = new Set<number>();
-  /** Try many keys quickly — never sit on a shared-pool RPM wait. */
-  const MAX_ATTEMPTS = 16;
 
   while (true) {
     const keys = getGeminiKeys();
     const stats = geminiKeyPoolStats("chat");
+    const maxAttempts = Math.max(keys.length, 8) + fallbacks.length * 4;
 
-    if (attempts >= MAX_ATTEMPTS || skipped.size >= keys.length) {
+    if (attempts >= maxAttempts) {
       break;
     }
 
-    if (!hasAvailableGeminiKey("chat")) {
-      // No cool keys left (RPM skips + RPD parks). Don't block for ~40s — fail fast.
-      throw new Error(
-        formatGeminiUserError(
-          "All keys cooling or out of daily quota — wait or retry after UTC midnight.",
-        ),
-      );
-    }
-
-    const keyIndex = pickGeminiKeyIndex("chat");
-    if (skipped.has(keyIndex)) {
-      releaseGeminiKey("chat", keyIndex);
-      rotateGeminiKey("chat", keyIndex);
-      attempts += 1;
-      continue;
+    const keyIndex = pickGeminiKeyIndex("chat", skipped);
+    if (keyIndex == null) {
+      if (fallbacks.length) {
+        model = fallbacks.shift()!;
+        demandFails = 0;
+        skipped.clear();
+        attempts = 0;
+        console.info(
+          `[agent] no cool keys on overloaded model — falling back to ${model}`,
+        );
+        continue;
+      }
+      break;
     }
 
     attempts += 1;
     console.info(
-      `[agent] gemini key#${keyIndex + 1}/${stats.total} (cool=${stats.cool} hot=${stats.hot} attempt=${attempts})`,
+      `[agent] gemini key#${keyIndex + 1}/${stats.total} model=${model} (cool=${stats.cool} hot=${stats.hot} attempt=${attempts})`,
     );
 
     try {
@@ -147,10 +147,9 @@ async function callModelStream(
         contents,
         handlers,
         thinkingLevel,
-        { useAgentTools, figmaBuild },
+        { useAgentTools, figmaBuild, model },
       );
-      console.info(`[agent] gemini key#${keyIndex + 1} stream ok`);
-      // Stick to this key; soft-rotate before ~15 RPM burns one free-tier key
+      console.info(`[agent] gemini key#${keyIndex + 1} stream ok (${model})`);
       noteGeminiKeySuccess("chat", keyIndex);
       return result;
     } catch (err) {
@@ -163,27 +162,39 @@ async function callModelStream(
       const retryable =
         (status && isRetryableGeminiError(status, lastError)) ||
         isRetryableGeminiMessage(lastError);
-
-      if (!retryable) throw new Error(formatGeminiUserError(lastError));
+      const modelDemand =
+        isCapacityMessage(lastError) ||
+        /unavailable|high demand|timeout|timed out/i.test(lastError);
 
       skipped.add(keyIndex);
 
-      if (isDailyQuotaMessage(lastError)) {
-        // RPD burned — park until next UTC day only
-        markGeminiKeyHot("chat", keyIndex, {
-          daily: true,
-          message: lastError,
-        });
-      } else if (isCapacityMessage(lastError)) {
-        // 503 — short skip, random next key immediately
-        markGeminiKeyHot("chat", keyIndex, { message: lastError });
-      } else if (isRateLimitMessage(lastError)) {
-        // RPM / RESOURCE_EXHAUSTED — short skip only, NEVER next-day unless RPD
-        markGeminiKeyHot("chat", keyIndex, { ms: 55_000 });
+      if (modelDemand) {
+        demandFails += 1;
+        markGeminiKeyHot("chat", keyIndex, { ms: 2_500, message: lastError });
+        if (demandFails >= 2 && fallbacks.length) {
+          const from = model;
+          model = fallbacks.shift()!;
+          demandFails = 0;
+          skipped.clear();
+          console.info(
+            `[agent] ${from} high demand — continuing on ${model}`,
+          );
+        }
       } else {
-        markGeminiKeyHot("chat", keyIndex, { ms: 55_000 });
+        markGeminiKeyHot("chat", keyIndex, {
+          daily: isDailyQuotaMessage(lastError),
+          message: lastError,
+          ms: isDailyQuotaMessage(lastError)
+            ? undefined
+            : isRateLimitMessage(lastError)
+              ? 55_000
+              : 8_000,
+        });
       }
-      // Loop continues immediately on a random cool key
+
+      if (!retryable && !modelDemand) {
+        throw new Error(formatGeminiUserError(lastError));
+      }
     } finally {
       releaseGeminiKey("chat", keyIndex);
     }
@@ -431,7 +442,7 @@ async function runToolCalls(
       c.name === "delete_file" ||
       c.name === "install_package"
     )) {
-      await new Promise((r) => setTimeout(r, 120));
+      await new Promise((r) => setTimeout(r, 40));
     }
 
     const outcomes = await Promise.all(
@@ -670,6 +681,7 @@ export async function streamAgentEvents(
         }
 
         const maxSteps = MAX_STEPS;
+        let askedFinish = false;
         for (let step = 0; step < maxSteps; step++) {
           state.currentPhaseId = "";
           let streamedText = "";
@@ -1008,9 +1020,29 @@ export async function streamAgentEvents(
           }
 
           if (state.finished) break;
+
+          if (
+            !askedFinish &&
+            state.files.size > 0 &&
+            !functionCalls.some((c) => c.name === "finish")
+          ) {
+            askedFinish = true;
+            contents.push({
+              role: "user",
+              parts: [
+                {
+                  text: "SYSTEM: Files are already written. Call finish now with summary = 2–4 short paragraphs (Your X is ready. **Brand** is … Open the preview and …). Do not write more files unless a write failed.",
+                },
+              ],
+            });
+          }
         }
 
         if (!state.finished) state.finished = true;
+        const fallbackSummary = ensureBuildSummary(state);
+        if (fallbackSummary?.length) {
+          emit({ type: "summary", lines: fallbackSummary });
+        }
         state.timeline = state.timeline.filter(
           (p) =>
             p.type !== "phase" ||

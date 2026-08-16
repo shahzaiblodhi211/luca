@@ -51,6 +51,7 @@ export async function POST(req: Request) {
   let lastError = "Transcription failed";
   for (let attempt = 0; attempt < Math.min(keys.length, 4); attempt++) {
     const keyIndex = pickGeminiKeyIndex("chat");
+    if (keyIndex == null) break;
     const apiKey = keys[keyIndex];
     if (!apiKey) {
       releaseGeminiKey("chat", keyIndex);

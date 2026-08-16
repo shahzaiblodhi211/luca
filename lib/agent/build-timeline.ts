@@ -6,6 +6,7 @@ import type {
   BuildPhasePart,
 } from "@/lib/types";
 import type { AgentState } from "./tools";
+import { prettyFileLabel } from "./pretty-file-label";
 
 export function linesOf(code: string): number {
   if (!code) return 0;
@@ -159,6 +160,44 @@ export function buildStatusFromState(state: AgentState): {
   else if (deletes && !creates && !updates) action = "Deleted";
   else if (creates && updates) action = "Built";
   return { action, filesChanged, linesDelta: lines };
+}
+
+function brandFromProjectId(id: string): string {
+  const raw = (id || "").trim();
+  if (!raw || raw === "project" || /^[a-zA-Z0-9_-]{18,}$/.test(raw)) {
+    return "project";
+  }
+  return raw
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** Always leave a Chronos-style reply after a build if the model skipped `finish`. */
+export function ensureBuildSummary(state: AgentState): string[] | null {
+  if (state.timeline.some((p) => p.type === "summary" && p.lines.length)) {
+    return null;
+  }
+  const paths = [...state.files.keys()].filter((p) =>
+    /\.(tsx|jsx|css)$/i.test(p),
+  );
+  if (!paths.length) return null;
+
+  const brand = brandFromProjectId(state.projectId);
+  const labels = [...new Set(paths.map((p) => prettyFileLabel(p)))].slice(0, 5);
+  const list =
+    labels.length > 1
+      ? `${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`
+      : labels[0] || "the UI";
+
+  const lines = [
+    `Your ${brand} is ready.`,
+    `**${brand}** is a Next.js app with Tailwind. I built ${list}.`,
+    `Open the preview and try the main controls.`,
+  ];
+  state.timeline.push({ type: "summary", lines });
+  const joined = lines.join("\n\n");
+  if (!state.texts.includes(joined)) state.texts.push(joined);
+  return lines;
 }
 
 export function summaryLinesFromText(text: string): string[] {

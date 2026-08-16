@@ -21,10 +21,17 @@ export function hasToolCallLeak(code: string): boolean {
 /**
  * Remove leaked tool-call tails. Returns cleaned code (may be unchanged).
  */
-export function sanitizeGeneratedCode(code: string): string {
-  if (!code || !hasToolCallLeak(code)) return code;
+function hardenUnsafeJsonParse(code: string): string {
+  return code.replace(
+    /JSON\.parse\(\s*((?:window\.)?(?:local|session)Storage\.getItem\([^)]+\))(?:\s*\|\|\s*(?:""|''))?\s*\)/g,
+    (_m, get: string) => `JSON.parse(${get} || "null")`,
+  );
+}
 
-  let next = code.replace(/\s+$/, "");
+export function sanitizeGeneratedCode(code: string): string {
+  if (!code) return code;
+  let next = hardenUnsafeJsonParse(code);
+  if (!hasToolCallLeak(next)) return next;
 
   // Prefer cutting at the earliest leak marker in the last ~400 chars
   const windowStart = Math.max(0, next.length - 400);

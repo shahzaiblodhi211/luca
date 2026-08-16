@@ -38,6 +38,7 @@ import {
 } from "@/lib/luca-model-tier";
 import { useAuthModal } from "@/components/auth/auth-context";
 import { useAuthToast } from "@/components/auth/auth-toast";
+import { isOutOfSpendableCredits } from "@/lib/billing/types";
 import type { PlanId } from "@/lib/billing/plans";
 import { thinkingLevelForPlan } from "@/lib/billing/plans";
 import type {
@@ -688,6 +689,10 @@ export function ChatWorkspace({
       thinkingLevel?: ThinkingLevel;
       lucaModelTier?: LucaModelTier;
     }) => {
+      if (isOutOfSpendableCredits(billing)) {
+        openPlans();
+        return;
+      }
       setBusy(true);
       setLiveState(emptyLive());
       stoppedTurnRef.current = false;
@@ -957,7 +962,7 @@ export function ChatWorkspace({
         stoppedTurnRef.current = false;
       }
     },
-    [chatId, refreshChat, setLiveState, patchLive, openPlans, thinkingLevel, setBilling, refreshUser],
+    [chatId, refreshChat, setLiveState, patchLive, openPlans, thinkingLevel, setBilling, refreshUser, billing],
   );
 
   useEffect(() => {

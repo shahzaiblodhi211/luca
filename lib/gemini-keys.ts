@@ -13,8 +13,8 @@ export const MAX_GEMINI_KEYS = 500;
 /** Skip a key for this long after a short RPM 429 (~1 minute window). */
 const HOT_MS_RPM = 55_000;
 
-/** Soft skip after 503 / high-demand — keep tiny so the next key is tried immediately. */
-const HOT_MS_SOFT = 1_500;
+/** Soft skip after 503 / high-demand — stay off this key for the rest of the turn. */
+const HOT_MS_SOFT = 20_000;
 
 /** Daily / billing quota — don't retry until next UTC day (plus buffer). */
 const HOT_MS_DAILY_MAX = 24 * 60 * 60_000;
@@ -81,8 +81,6 @@ export function isDailyQuotaMessage(message: string): boolean {
   }
   return (
     hasDayQuotaSignal(message, lower) ||
-    lower.includes("free_tier") ||
-    lower.includes("free tier") ||
     (lower.includes("daily") && lower.includes("quota"))
   );
 }
@@ -94,6 +92,9 @@ export function formatGeminiUserError(message: string): string {
     /cooling|out of daily|all gemini keys|no cool keys|capacity/i.test(lower)
   ) {
     return "Luca is at capacity right now. Wait about a minute, or try again after midnight UTC.";
+  }
+  if (isPolicyRestrictedMessage(message)) {
+    return "Luca couldn't finish that request. Try again in a moment.";
   }
   if (/shared.?project|same google cloud|rpm\/rpd pool/i.test(message)) {
     return "Luca is at capacity right now. Wait about a minute and try again.";
@@ -201,12 +202,23 @@ type PersistedFile = {
   image: PersistedPool;
 };
 
-/**
- * Soft-rotate sticky key before free-tier ~15 RPM. Agent does 1 tool/step, so
- * one sticky key burns the whole minute alone if we never leave it.
- */
-/** Stay under free-tier ~15 RPM but allow longer store builds on one sticky key. */
-const SOFT_ROTATE_CALLS_PER_MIN = 12;
+/** Park a Trust & Safety / ToS-restricted key for a week. */
+const HOT_MS_POLICY = 7 * 24 * 60 * 60_000;
+
+/** Trust & Safety / ToS — park this key and try the next one. */
+export function isPolicyRestrictedMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("denied access") ||
+    lower.includes("terms of service") ||
+    lower.includes("acceptable use") ||
+    lower.includes("policy violation") ||
+    lower.includes("has been restricted") ||
+    lower.includes("has been denied") ||
+    (lower.includes("permission_denied") &&
+      (lower.includes("project") || lower.includes("restricted")))
+  );
+}
 
 declare global {
   // eslint-disable-next-line no-var
@@ -443,7 +455,6 @@ function loadKeysFromConfig(): {
     if (seen.has(k)) continue;
     seen.add(k);
     keys.push(k);
-    if (keys.length >= MAX_GEMINI_KEYS) break;
   }
 
   if (keys.length === 0) {
@@ -456,8 +467,8 @@ function loadKeysFromConfig(): {
 }
 
 /**
- * Load all configured keys (up to {@link MAX_GEMINI_KEYS}):
- * - GEMINI_API_KEY_1 … GEMINI_API_KEY_500
+ * Load configured keys (up to {@link MAX_GEMINI_KEYS}):
+ * - GEMINI_API_KEY_1…N
  * - and/or GEMINI_API_KEYS=keyA,keyB,… (comma / semicolon / whitespace)
  * - and/or GEMINI_API_KEYS_FILE=path/to/keys.txt
  *   (`GEMINI_API_KEY_1=…` lines, and/or one raw key per line)
@@ -472,13 +483,14 @@ export function getGeminiKeys(): string[] {
     (global._geminiKeysFilePath !== meta.abs ||
       global._geminiKeysFileMtime !== meta.mtime);
 
-  if (cached?.length && !fileChanged) {
-    return cached;
-  }
-
   const prevLen = cached?.length || 0;
   const oldFps = global._geminiKeyFps;
   const { keys, fileAbs, fileMtime } = loadKeysFromConfig();
+
+  if (cached?.length && !fileChanged && cached.length === keys.length) {
+    return cached;
+  }
+
   const fps = keys.map(fingerprint);
 
   if (oldFps?.length && (prevLen !== keys.length || fileChanged)) {
@@ -500,8 +512,10 @@ export function getGeminiKeys(): string[] {
     console.info(
       `[gemini-keys] reloaded pool ${prevLen} → ${keys.length} key(s)`,
     );
-  } else if (keys.length > 1 && !prevLen) {
-    console.info(`[gemini-keys] loaded ${keys.length} key(s) for rotation`);
+  } else if (keys.length && !prevLen) {
+    console.info(
+      `[gemini-keys] loaded ${keys.length} key(s) — rotate on fail`,
+    );
   }
 
   return keys;
@@ -546,30 +560,33 @@ export function listCoolGeminiKeyIndices(pool: GeminiKeyPool): number[] {
   return cool;
 }
 
-/** Point sticky cursor at a random cool key (exclude optional index). */
-export function jumpToRandomCoolGeminiKey(
+/** Point cursor at the next cool key after `fromIndex` (wraps). */
+export function jumpToNextCoolGeminiKey(
   pool: GeminiKeyPool,
-  excludeIndex?: number,
+  fromIndex: number,
 ): number | null {
   const keys = getGeminiKeys();
   const state = poolState(pool);
-  const cool = listCoolGeminiKeyIndices(pool).filter((i) => i !== excludeIndex);
-  if (!cool.length) {
-    // Fall back to any non-excluded key as next sticky target
-    const others = keys.map((_, i) => i).filter((i) => i !== excludeIndex);
-    if (!others.length) return null;
-    const pick = others[Math.floor(Math.random() * others.length)]!;
-    state.current = pick;
-    savePersisted();
-    return pick;
-  }
-  const pick = cool[Math.floor(Math.random() * cool.length)]!;
+  const n = keys.length;
+  if (!n) return null;
+  const cool = listCoolGeminiKeyIndices(pool).filter((i) => i !== fromIndex);
+  if (!cool.length) return null;
+  const pick =
+    n === 1 ? cool[0]! : (cool.find((i) => i > fromIndex) ?? cool[0]!);
   state.current = pick;
   savePersisted();
   return pick;
 }
 
-/** Mark key rate-limited — then jump sticky cursor to a random cool key. */
+/** @deprecated Prefer {@link jumpToNextCoolGeminiKey}. */
+export function jumpToRandomCoolGeminiKey(
+  pool: GeminiKeyPool,
+  excludeIndex?: number,
+): number | null {
+  return jumpToNextCoolGeminiKey(pool, excludeIndex ?? poolState(pool).current);
+}
+
+/** Park this key, then point the cursor at the next cool key. */
 export function markGeminiKeyHot(
   pool: GeminiKeyPool,
   keyIndex: number,
@@ -577,34 +594,41 @@ export function markGeminiKeyHot(
 ): void {
   const keys = getGeminiKeys();
   const state = poolState(pool);
+  const msg = opts?.message || "";
+  const policy = isPolicyRestrictedMessage(msg);
   const daily =
     opts?.daily === true ||
-    (opts?.message ? isDailyQuotaMessage(opts.message) : false);
+    (msg ? isDailyQuotaMessage(msg) : false);
   const soft =
     !daily &&
+    !policy &&
     (typeof opts?.ms === "number"
       ? false
-      : opts?.message
-        ? isCapacityMessage(opts.message)
+      : msg
+        ? isCapacityMessage(msg)
         : false);
   const hotMs =
     typeof opts?.ms === "number"
       ? opts.ms
-      : daily
-        ? msUntilNextUtcMidnight()
-        : soft
-          ? HOT_MS_SOFT
-          : HOT_MS_RPM;
-  const reason = daily ? "daily/RPD" : soft ? "capacity" : "rpm";
+      : policy
+        ? HOT_MS_POLICY
+        : daily
+          ? msUntilNextUtcMidnight()
+          : soft
+            ? HOT_MS_SOFT
+            : HOT_MS_RPM;
+  const reason = policy
+    ? "policy/restricted"
+    : daily
+      ? "daily/RPD"
+      : soft
+        ? "capacity"
+        : "rpm";
   state.hotUntil.set(keyIndex, Date.now() + hotMs);
   inFlight(pool).delete(keyIndex);
-
-  // Always persist daily/RPD burns so we don't retry until next UTC day
-  if (daily || !soft) savePersisted();
-
-  const next = jumpToRandomCoolGeminiKey(pool, keyIndex);
+  const next = jumpToNextCoolGeminiKey(pool, keyIndex);
   console.info(
-    `[gemini-keys] key#${keyIndex + 1}/${keys.length} hot (~${Math.round(hotMs / 1000)}s, ${reason}) — next → key#${next != null ? next + 1 : "?"}`,
+    `[gemini-keys] key#${keyIndex + 1}/${keys.length} hot (~${Math.round(hotMs / 1000)}s, ${reason}) — next key#${(next ?? keyIndex) + 1}`,
   );
 }
 
@@ -640,43 +664,29 @@ export async function waitForCoolGeminiKey(
 }
 
 /**
- * Sticky pick: burn the current key until it fails.
- * Only jumps away when current is hot/in-flight (then picks a random cool key).
+ * Pick a cool key only. Never returns a hot key or an index in `exclude`.
  */
-export function pickGeminiKeyIndex(pool: GeminiKeyPool): number {
+export function pickGeminiKeyIndex(
+  pool: GeminiKeyPool,
+  exclude?: Set<number>,
+): number | null {
   const keys = getGeminiKeys();
   const state = poolState(pool);
   const n = keys.length;
+  if (!n) return null;
   const busy = inFlight(pool);
+  const cool = listCoolGeminiKeyIndices(pool).filter(
+    (i) => !exclude?.has(i),
+  );
+  if (!cool.length) return null;
+
   const cur = ((state.current % n) + n) % n;
-
-  // Prefer sticking to the current key (burn first, then move)
-  if (!isHot(pool, cur) && !busy.has(cur)) {
-    busy.add(cur);
-    return cur;
-  }
-
-  const cool = listCoolGeminiKeyIndices(pool);
-  if (cool.length) {
-    const pick = cool[Math.floor(Math.random() * cool.length)]!;
-    state.current = pick;
-    busy.add(pick);
-    return pick;
-  }
-
-  // All busy — return oldest-hot (caller should fail fast / wait)
-  let best = cur;
-  let bestUntil = Infinity;
-  for (let i = 0; i < n; i++) {
-    const until = state.hotUntil.get(i) || 0;
-    if (until < bestUntil) {
-      bestUntil = until;
-      best = i;
-    }
-  }
-  state.current = best;
-  busy.add(best);
-  return best;
+  const pick = cool.includes(cur)
+    ? cur
+    : cool.find((i) => i > cur) ?? cool[0]!;
+  state.current = pick;
+  busy.add(pick);
+  return pick;
 }
 
 /** Release in-flight reservation after a stream finishes (ok or fail). */
@@ -684,54 +694,38 @@ export function releaseGeminiKey(pool: GeminiKeyPool, keyIndex: number): void {
   inFlight(pool).delete(keyIndex);
 }
 
+const SOFT_ROTATE_CALLS_PER_MIN = 12;
+
 /**
- * After a successful stream: stick to this key, persist cursor, and soft-rotate
- * if this key already did ~SOFT_ROTATE_CALLS_PER_MIN calls in the last minute
- * (so we don't slam a single free-tier 15 RPM bucket).
+ * After a successful stream: stay on this key until it is close to free-tier RPM,
+ * then move to the next cool key.
  */
 export function noteGeminiKeySuccess(
   pool: GeminiKeyPool,
   keyIndex: number,
 ): void {
-  const keys = getGeminiKeys();
-  const fps = global._geminiKeyFps || keys.map(fingerprint);
-  const fp = fps[keyIndex];
-  const state = poolState(pool);
-  state.current = keyIndex;
-
-  if (!fp) {
-    savePersisted();
-    return;
-  }
-
-  if (!global._geminiKeySuccessStamps) {
-    global._geminiKeySuccessStamps = new Map();
-  }
+  poolState(pool).current = keyIndex;
+  if (!global._geminiKeySuccessStamps) global._geminiKeySuccessStamps = new Map();
+  const stampKey = `${pool}:${keyIndex}`;
   const now = Date.now();
-  const recent = (global._geminiKeySuccessStamps.get(fp) || []).filter(
+  const stamps = (global._geminiKeySuccessStamps.get(stampKey) || []).filter(
     (t) => now - t < RPM_WINDOW_MS,
   );
-  recent.push(now);
-  global._geminiKeySuccessStamps.set(fp, recent);
-
-  if (recent.length >= SOFT_ROTATE_CALLS_PER_MIN) {
-    global._geminiKeySuccessStamps.set(fp, []);
-    console.info(
-      `[gemini-keys] key#${keyIndex + 1}/${keys.length} soft-rotate after ${recent.length} ok/min (stay under ~15 RPM)`,
-    );
-    jumpToRandomCoolGeminiKey(pool, keyIndex);
-    return;
+  stamps.push(now);
+  global._geminiKeySuccessStamps.set(stampKey, stamps);
+  if (stamps.length >= SOFT_ROTATE_CALLS_PER_MIN) {
+    jumpToNextCoolGeminiKey(pool, keyIndex);
+    global._geminiKeySuccessStamps.set(stampKey, []);
   }
-
   savePersisted();
 }
 
 /**
- * On error: park the failed key and point sticky cursor at a random cool key.
+ * On error: park the failed key and point the cursor at the next cool key.
  * Prefer markGeminiKeyHot which already does this.
  */
 export function rotateGeminiKey(pool: GeminiKeyPool, excludeIndex?: number): void {
-  jumpToRandomCoolGeminiKey(pool, excludeIndex);
+  jumpToNextCoolGeminiKey(pool, excludeIndex ?? poolState(pool).current);
 }
 
 /** @deprecated Use markGeminiKeyHot */
@@ -755,7 +749,7 @@ export function isKeyCooling(pool: GeminiKeyPool, keyIndex: number): boolean {
 
 /** @deprecated Prefer pickGeminiKeyIndex('chat'). */
 export function nextGeminiKeyIndex(keysLen: number): number {
-  return pickGeminiKeyIndex("chat") % Math.max(1, keysLen);
+  return (pickGeminiKeyIndex("chat") ?? 0) % Math.max(1, keysLen);
 }
 
 /** @deprecated Prefer rotateGeminiKey. */
@@ -765,21 +759,23 @@ export function markGeminiKeyFailed(_failedIndex: number, _keysLen: number) {
 
 export function isRetryableGeminiError(status: number, body: string): boolean {
   if (RETRYABLE_STATUS.has(status)) return true;
+  if (isPolicyRestrictedMessage(body) || isRateLimitMessage(body)) return true;
   const lower = body.toLowerCase();
   return (
-    lower.includes("resource_exhausted") ||
-    lower.includes("quota") ||
-    lower.includes("billing") ||
-    lower.includes("rate limit") ||
     lower.includes("unavailable") ||
-    lower.includes("overloaded")
+    lower.includes("overloaded") ||
+    lower.includes("bad gateway")
   );
 }
 
 export function isRetryableGeminiMessage(message: string): boolean {
+  if (isPolicyRestrictedMessage(message) || isRateLimitMessage(message)) {
+    return true;
+  }
+  if (isCapacityMessage(message)) return true;
   return (
     /\b(403|429|500|502|503|504)\b/.test(message) ||
-    /resource_exhausted|quota|billing|rate limit|unavailable|overloaded|bad gateway/i.test(
+    /unavailable|overloaded|bad gateway|timeout|timed out|high demand/i.test(
       message,
     ) ||
     message.includes("fetch failed") ||

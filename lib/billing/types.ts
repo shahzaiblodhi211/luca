@@ -18,6 +18,14 @@ export type PublicBilling = {
   figmaImportsRemaining: number;
 };
 
+/** True when the user cannot start another paid chat turn. */
+export function isOutOfSpendableCredits(
+  billing: PublicBilling | null | undefined,
+): boolean {
+  if (!billing || billing.billingExempt) return false;
+  return billing.creditsRemaining <= 0 || billing.creditsRemainingToday <= 0;
+}
+
 export type BillingInvoice = {
   id: string;
   date: string;

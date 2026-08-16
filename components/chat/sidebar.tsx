@@ -137,7 +137,7 @@ export function Sidebar({
     (initialChats ?? []).slice(0, RECENT_PAGE_SIZE),
   );
   const [hasMoreChats, setHasMoreChats] = useState(
-    (initialChats?.length ?? 0) > RECENT_PAGE_SIZE,
+    (initialChats?.length ?? 0) >= RECENT_PAGE_SIZE,
   );
   const [chatsLoading, setChatsLoading] = useState(
     !(initialChats && initialChats.length),
@@ -163,6 +163,7 @@ export function Sidebar({
   useEffect(() => {
     let cancelled = false;
     async function loadFirstPage() {
+      if (authLoading) return;
       if (!user) {
         if (!cancelled) {
           setChats([]);
@@ -171,35 +172,46 @@ export function Sidebar({
         }
         return;
       }
-      if (chats.length) {
-        setChatsLoading(false);
-        return;
-      }
-      setChatsLoading(true);
+      if (!cancelled && chats.length === 0) setChatsLoading(true);
       try {
         const res = await fetch(
           `/api/chats?limit=${RECENT_PAGE_SIZE}&offset=0`,
         );
         if (!res.ok) {
-          if (!cancelled) {
-            setChats([]);
-            setHasMoreChats(false);
-          }
+          if (!cancelled) setHasMoreChats(false);
           return;
         }
         const data = (await res.json()) as {
           chats: ChatSummary[];
           hasMore?: boolean;
         };
-        if (!cancelled) {
-          setChats(data.chats);
-          setHasMoreChats(Boolean(data.hasMore));
-        }
+        if (cancelled) return;
+        const pathId = pathname.startsWith("/c/")
+          ? pathname.slice(3).split("/")[0]
+          : "";
+        setChats((prev) => {
+          const fetched = data.chats;
+          const seen = new Set(fetched.map((c) => c.id));
+          const extras = prev.filter((c) => !seen.has(c.id));
+          const merged = extras.length ? [...fetched, ...extras] : fetched;
+          if (pathId && !merged.some((c) => c.id === pathId)) {
+            return [
+              {
+                id: pathId,
+                title: "New chat",
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                projectId: null,
+                hasProject: false,
+              },
+              ...merged,
+            ];
+          }
+          return merged;
+        });
+        setHasMoreChats(Boolean(data.hasMore));
       } catch {
-        if (!cancelled) {
-          setChats([]);
-          setHasMoreChats(false);
-        }
+        if (!cancelled) setHasMoreChats(false);
       } finally {
         if (!cancelled) setChatsLoading(false);
       }
@@ -208,7 +220,7 @@ export function Sidebar({
     return () => {
       cancelled = true;
     };
-  }, [user?.id]);
+  }, [user?.id, authLoading, pathname]);
 
   useEffect(() => {
     if (!pathname.startsWith("/c/")) return;
@@ -539,7 +551,7 @@ export function Sidebar({
 
             {recentOpen && (
               <ul className="space-y-0.5 pb-2">
-                {chatsLoading
+                {chatsLoading && chats.length === 0
                   ? Array.from({ length: RECENT_PAGE_SIZE }, (_, i) => (
                       <RecentChatSkeleton key={`recent-skel-${i}`} />
                     ))

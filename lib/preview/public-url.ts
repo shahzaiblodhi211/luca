@@ -48,10 +48,38 @@ export function rewritePreviewUpstreamPath(
 ): string {
   const matched = matchPublicPreviewPath(pathname);
   const canonical = previewBasePathForChat(chatId);
-  const rest = matched?.rest || "/";
-  if (!canonical) return rest.startsWith("/") ? rest : `/${rest}`;
-  if (rest === "/") return `${canonical}/`;
-  return `${canonical}${rest}`;
+  const path = pathname.startsWith("/") ? pathname : `/${pathname}`;
+
+  if (matched) {
+    const rest = matched.rest || "/";
+    if (!canonical) return rest.startsWith("/") ? rest : `/${rest}`;
+    if (rest === "/") return `${canonical}/`;
+    return `${canonical}${rest}`;
+  }
+
+  if (
+    canonical &&
+    (path.startsWith("/_next") ||
+      path.startsWith("/__next") ||
+      path.includes("webpack-hmr"))
+  ) {
+    return `${canonical}${path}`;
+  }
+
+  if (!canonical) return path;
+  return path;
+}
+
+export function chatIdFromPreviewReferer(
+  referer: string | string[] | undefined,
+): string | null {
+  const raw = Array.isArray(referer) ? referer[0] : referer;
+  if (!raw) return null;
+  try {
+    return matchPublicPreviewPath(new URL(raw).pathname)?.chatId ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export function previewPublicOriginHost(): string | null {

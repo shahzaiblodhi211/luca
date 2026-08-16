@@ -72,7 +72,15 @@ function canWarmPreview(files: ProjectFile[]): boolean {
   );
 }
 
-const PREVIEW_DEBOUNCE_STREAM_MS = 650;
+async function readResponseJson(res: Response): Promise<Record<string, unknown>> {
+  const text = await res.text();
+  if (!text.trim()) return {};
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return { error: text.slice(0, 240) };
+  }
+}
 const PREVIEW_DEBOUNCE_IDLE_MS = 280;
 const PREVIEW_FIRST_WARM_MS = 150;
 
@@ -304,7 +312,7 @@ export function CodePreview({
             restart: opts?.restart,
           }),
         });
-        const data = (await res.json()) as PreviewUrlPayload & {
+        const data = (await readResponseJson(res)) as PreviewUrlPayload & {
           url?: string;
           port?: number;
           routes?: PreviewRoute[];
@@ -481,7 +489,7 @@ export function CodePreview({
           imageDataUrls,
         }),
       });
-      const data = (await res.json()) as {
+      const data = (await readResponseJson(res)) as {
         error?: string;
         url?: string;
         needsConnect?: boolean;

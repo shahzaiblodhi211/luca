@@ -26,6 +26,7 @@ import {
   workspaceExists,
 } from "@/lib/preview/paths";
 import {
+  chatIdFromPreviewReferer,
   matchPublicPreviewPath,
   previewBasePathForChat,
   rewritePreviewUpstreamPath,
@@ -88,6 +89,22 @@ function readBody(req: IncomingMessage): Promise<string> {
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", reject);
   });
+}
+
+function resolvePreviewChatId(
+  req: IncomingMessage,
+  pathname: string,
+): string | null {
+  const fromPath = matchPublicPreviewPath(pathname)?.chatId;
+  if (fromPath) return fromPath;
+  if (
+    pathname.startsWith("/_next") ||
+    pathname.startsWith("/__next") ||
+    pathname.includes("webpack-hmr")
+  ) {
+    return chatIdFromPreviewReferer(req.headers.referer);
+  }
+  return null;
 }
 
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -199,11 +216,12 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    const previewChatId = resolvePreviewChatId(req, pathname);
     const previewProxy = matchPublicPreviewPath(pathname);
-    if (previewProxy) {
+    if (previewChatId && (previewProxy || pathname.startsWith("/_next") || pathname.startsWith("/__next") || pathname.includes("webpack-hmr"))) {
       let chatId: string;
       try {
-        chatId = sanitizeChatId(previewProxy.chatId);
+        chatId = sanitizeChatId(previewChatId);
       } catch {
         json(res, 400, { error: "Invalid preview" });
         return;
@@ -262,14 +280,14 @@ const server = createServer(async (req, res) => {
 server.on("upgrade", (req, socket, head) => {
   void (async () => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "local"}`);
-    const previewProxy = matchPublicPreviewPath(url.pathname);
-    if (!previewProxy) {
+    const chatIdRaw = resolvePreviewChatId(req, url.pathname);
+    if (!chatIdRaw) {
       socket.destroy();
       return;
     }
     let chatId: string;
     try {
-      chatId = sanitizeChatId(previewProxy.chatId);
+      chatId = sanitizeChatId(chatIdRaw);
     } catch {
       socket.destroy();
       return;
