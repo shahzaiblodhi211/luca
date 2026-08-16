@@ -61,8 +61,9 @@ export async function POST(req: Request) {
   try {
     const checkout = await polar.checkouts.clientGet({ clientSecret });
     const owner =
-      checkout.externalCustomerId ||
-      (checkout.metadata?.userId as string | undefined);
+      typeof checkout.metadata?.userId === "string"
+        ? checkout.metadata.userId
+        : undefined;
     if (owner && owner !== user.id) {
       return NextResponse.json({ error: "Checkout does not match this account." }, { status: 403 });
     }
